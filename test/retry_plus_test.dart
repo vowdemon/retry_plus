@@ -32,14 +32,13 @@ void main() {
       var attempts = 0;
       final retryEvents = <RetryEvent<String>>[];
 
-      final result =
-          await RetryPolicy<String>(
-            delay: DelayStrategy.none(),
-            onRetry: retryEvents.add,
-          ).execute(() async {
-            attempts++;
-            return 'ok';
-          });
+      final result = await RetryPolicy<String>(
+        delay: DelayStrategy.none(),
+        onRetry: retryEvents.add,
+      ).execute(() async {
+        attempts++;
+        return 'ok';
+      });
 
       expect(result, 'ok');
       expect(attempts, 1);
@@ -49,18 +48,17 @@ void main() {
     test('retries retryable exceptions until the operation succeeds', () async {
       var attempts = 0;
 
-      final result =
-          await RetryPolicy<String>(
-            stop: StopStrategy.afterAttempt(3),
-            delay: DelayStrategy.none(),
-            retryIf: RetryPredicate<String>.exception(),
-          ).execute(() async {
-            attempts++;
-            if (attempts < 3) {
-              throw const SocketException('offline');
-            }
-            return 'ready';
-          });
+      final result = await RetryPolicy<String>(
+        stop: StopStrategy.afterAttempt(3),
+        delay: DelayStrategy.none(),
+        retryIf: RetryPredicate<String>.exception(),
+      ).execute(() async {
+        attempts++;
+        if (attempts < 3) {
+          throw const SocketException('offline');
+        }
+        return 'ready';
+      });
 
       expect(result, 'ready');
       expect(attempts, 3);
@@ -70,15 +68,14 @@ void main() {
       var attempts = 0;
       final error = StateError('not transient');
 
-      final call =
-          RetryPolicy<String>(
-            stop: StopStrategy.afterAttempt(3),
-            delay: DelayStrategy.none(),
-            retryIf: RetryPredicate.exceptionType<SocketException, String>(),
-          ).execute(() async {
-            attempts++;
-            throw error;
-          });
+      final call = RetryPolicy<String>(
+        stop: StopStrategy.afterAttempt(3),
+        delay: DelayStrategy.none(),
+        retryIf: RetryPredicate.exceptionType<SocketException, String>(),
+      ).execute(() async {
+        attempts++;
+        throw error;
+      });
 
       await expectLater(call, throwsA(same(error)));
       expect(attempts, 1);
@@ -89,15 +86,14 @@ void main() {
       () async {
         var attempts = 0;
 
-        final result =
-            await RetryPolicy<int>(
-              stop: StopStrategy.afterAttempt(3),
-              delay: DelayStrategy.none(),
-              retryIf: RetryPredicate<int>.result((value) => value < 10),
-            ).execute(() async {
-              attempts++;
-              return attempts == 3 ? 42 : 0;
-            });
+        final result = await RetryPolicy<int>(
+          stop: StopStrategy.afterAttempt(3),
+          delay: DelayStrategy.none(),
+          retryIf: RetryPredicate<int>.result((value) => value < 10),
+        ).execute(() async {
+          attempts++;
+          return attempts == 3 ? 42 : 0;
+        });
 
         expect(result, 42);
         expect(attempts, 3);
@@ -150,30 +146,28 @@ void main() {
         final sleeper = FakeSleeper(clock: clock);
         var attempts = 0;
 
-        final result =
-            await RetryPolicy<String>(
-              stop: StopStrategy.afterAttempt(3),
-              delay:
-                  DelayStrategy.exponential(
-                    initial: const Duration(milliseconds: 100),
-                    factor: 2,
-                    max: const Duration(milliseconds: 250),
-                  ) +
-                  DelayStrategy.random(
-                    min: const Duration(milliseconds: 10),
-                    max: const Duration(milliseconds: 20),
-                  ),
-              retryIf: RetryPredicate<String>.exception(),
-              clock: clock.now,
-              sleeper: sleeper.sleep,
-              random: SequenceRandom([0.5, 0.5]).nextDouble,
-            ).execute(() async {
-              attempts++;
-              if (attempts < 3) {
-                throw const SocketException('offline');
-              }
-              return 'ready';
-            });
+        final result = await RetryPolicy<String>(
+          stop: StopStrategy.afterAttempt(3),
+          delay: DelayStrategy.exponential(
+                initial: const Duration(milliseconds: 100),
+                factor: 2,
+                max: const Duration(milliseconds: 250),
+              ) +
+              DelayStrategy.random(
+                min: const Duration(milliseconds: 10),
+                max: const Duration(milliseconds: 20),
+              ),
+          retryIf: RetryPredicate<String>.exception(),
+          clock: clock.now,
+          sleeper: sleeper.sleep,
+          random: SequenceRandom([0.5, 0.5]).nextDouble,
+        ).execute(() async {
+          attempts++;
+          if (attempts < 3) {
+            throw const SocketException('offline');
+          }
+          return 'ready';
+        });
 
         expect(result, 'ready');
         expect(sleeper.delays, [
@@ -188,24 +182,23 @@ void main() {
       final sleeper = FakeSleeper(clock: clock);
       var attempts = 0;
 
-      final result =
-          await RetryPolicy<String>(
-            stop: StopStrategy.afterAttempt(2),
-            delay: DelayStrategy.exponential(
-              initial: const Duration(milliseconds: 100),
-              jitter: Jitter.full(),
-            ),
-            retryIf: RetryPredicate<String>.exception(),
-            clock: clock.now,
-            sleeper: sleeper.sleep,
-            random: SequenceRandom([0.25]).nextDouble,
-          ).execute(() async {
-            attempts++;
-            if (attempts == 1) {
-              throw StateError('try again');
-            }
-            return 'ready';
-          });
+      final result = await RetryPolicy<String>(
+        stop: StopStrategy.afterAttempt(2),
+        delay: DelayStrategy.exponential(
+          initial: const Duration(milliseconds: 100),
+          jitter: Jitter.full(),
+        ),
+        retryIf: RetryPredicate<String>.exception(),
+        clock: clock.now,
+        sleeper: sleeper.sleep,
+        random: SequenceRandom([0.25]).nextDouble,
+      ).execute(() async {
+        attempts++;
+        if (attempts == 1) {
+          throw StateError('try again');
+        }
+        return 'ready';
+      });
 
       expect(result, 'ready');
       expect(sleeper.delays, [const Duration(milliseconds: 25)]);
@@ -213,39 +206,39 @@ void main() {
 
     test('cancels promptly during a retry delay', () async {
       final token = CancellationToken();
-      final sleeper = CancellingSleeper(token);
+      final sleeper = CancellingSleeper();
       var attempts = 0;
 
-      final call =
-          RetryPolicy<String>(
-            stop: StopStrategy.afterAttempt(3),
-            delay: DelayStrategy.fixed(const Duration(seconds: 1)),
-            retryIf: RetryPredicate<String>.exception(),
-            sleeper: sleeper.sleep,
-          ).execute(() async {
-            attempts++;
-            throw const SocketException('offline');
-          }, cancellationToken: token);
+      final call = RetryPolicy<String>(
+        stop: StopStrategy.afterAttempt(3),
+        delay: DelayStrategy.fixed(const Duration(seconds: 1)),
+        retryIf: RetryPredicate<String>.exception(),
+        sleeper: sleeper.sleep,
+      ).execute(() async {
+        attempts++;
+        throw const SocketException('offline');
+      }, cancellationToken: token);
 
       await expectLater(call, throwsA(isA<RetryCancelledException>()));
       expect(attempts, 1);
       expect(sleeper.delays, [const Duration(seconds: 1)]);
+      expect(call.cancelToken.isCancelled, isTrue);
+      expect(identical(call.cancelToken, token), isTrue);
     });
 
     test('rethrows cancellation without retrying or giving up', () async {
       var attempts = 0;
       final giveUpEvents = <RetryEvent<String>>[];
 
-      final call =
-          RetryPolicy<String>(
-            stop: StopStrategy.afterAttempt(3),
-            delay: DelayStrategy.none(),
-            retryIf: RetryPredicate<String>.exception(),
-            onGiveUp: giveUpEvents.add,
-          ).execute(() async {
-            attempts++;
-            throw const RetryCancelledException('stopped');
-          });
+      final call = RetryPolicy<String>(
+        stop: StopStrategy.afterAttempt(3),
+        delay: DelayStrategy.none(),
+        retryIf: RetryPredicate<String>.exception(),
+        onGiveUp: giveUpEvents.add,
+      ).execute(() async {
+        attempts++;
+        throw const RetryCancelledException('stopped');
+      });
 
       await expectLater(call, throwsA(isA<RetryCancelledException>()));
       expect(attempts, 1);
@@ -304,18 +297,17 @@ void main() {
       'uses the same retry behavior for sync and convenience APIs',
       () async {
         var syncAttempts = 0;
-        final syncResult =
-            await RetryPolicy<int>(
-              stop: StopStrategy.afterAttempt(2),
-              delay: DelayStrategy.none(),
-              retryIf: RetryPredicate<int>.exception(),
-            ).executeSync(() {
-              syncAttempts++;
-              if (syncAttempts == 1) {
-                throw StateError('try again');
-              }
-              return 7;
-            });
+        final syncResult = await RetryPolicy<int>(
+          stop: StopStrategy.afterAttempt(2),
+          delay: DelayStrategy.none(),
+          retryIf: RetryPredicate<int>.exception(),
+        ).execute(() {
+          syncAttempts++;
+          if (syncAttempts == 1) {
+            throw StateError('try again');
+          }
+          return 7;
+        });
 
         var retryAttempts = 0;
         final retryResult = await retry<int>(
@@ -374,11 +366,9 @@ void main() {
       );
       const retryableResult = AttemptOutcome.result(0);
 
-      final either =
-          RetryPredicate.exceptionType<SocketException, int>() |
+      final either = RetryPredicate.exceptionType<SocketException, int>() |
           RetryPredicate<int>.result((value) => value == 0);
-      final both =
-          RetryPredicate<int>.exception() &
+      final both = RetryPredicate<int>.exception() &
           ~RetryPredicate.exceptionType<ArgumentError, int>();
 
       expect(either.shouldRetry(socketError), isTrue);
@@ -391,28 +381,26 @@ void main() {
   group('public retry extension points', () {
     test('custom retry predicates control retry decisions', () async {
       var classAttempts = 0;
-      final classResult =
-          await RetryPolicy<int>(
-            stop: StopStrategy.afterAttempt(2),
-            delay: DelayStrategy.none(),
-            retryIf: const _RetryZeroResult(),
-          ).execute(() async {
-            classAttempts++;
-            return classAttempts == 1 ? 0 : 7;
-          });
+      final classResult = await RetryPolicy<int>(
+        stop: StopStrategy.afterAttempt(2),
+        delay: DelayStrategy.none(),
+        retryIf: const _RetryZeroResult(),
+      ).execute(() async {
+        classAttempts++;
+        return classAttempts == 1 ? 0 : 7;
+      });
 
       var callbackAttempts = 0;
-      final callbackResult =
-          await RetryPolicy<int>(
-            stop: StopStrategy.afterAttempt(2),
-            delay: DelayStrategy.none(),
-            retryIf: RetryPredicate<int>.where(
-              (outcome) => !outcome.hasError && outcome.result == 0,
-            ),
-          ).execute(() async {
-            callbackAttempts++;
-            return callbackAttempts == 1 ? 0 : 9;
-          });
+      final callbackResult = await RetryPolicy<int>(
+        stop: StopStrategy.afterAttempt(2),
+        delay: DelayStrategy.none(),
+        retryIf: RetryPredicate<int>.where(
+          (outcome) => !outcome.hasError && outcome.result == 0,
+        ),
+      ).execute(() async {
+        callbackAttempts++;
+        return callbackAttempts == 1 ? 0 : 9;
+      });
 
       expect(classResult, 7);
       expect(classAttempts, 2);
@@ -428,28 +416,27 @@ void main() {
         final randomValues = <double>[];
         var attempts = 0;
 
-        final result =
-            await RetryPolicy<String>(
-              stop: StopStrategy.afterAttempt(3),
-              delay: DelayStrategy.custom((context, random) {
-                final randomValue = random();
-                randomValues.add(randomValue);
-                return Duration(
-                  milliseconds:
-                      context.attemptNumber * 100 + (randomValue * 8).round(),
-                );
-              }),
-              retryIf: RetryPredicate<String>.exception(),
-              clock: clock.now,
-              sleeper: sleeper.sleep,
-              random: SequenceRandom([0.5, 0.25]).nextDouble,
-            ).execute(() async {
-              attempts++;
-              if (attempts < 3) {
-                throw const SocketException('offline');
-              }
-              return 'ready';
-            });
+        final result = await RetryPolicy<String>(
+          stop: StopStrategy.afterAttempt(3),
+          delay: DelayStrategy.custom((context, random) {
+            final randomValue = random();
+            randomValues.add(randomValue);
+            return Duration(
+              milliseconds:
+                  context.attemptNumber * 100 + (randomValue * 8).round(),
+            );
+          }),
+          retryIf: RetryPredicate<String>.exception(),
+          clock: clock.now,
+          sleeper: sleeper.sleep,
+          random: SequenceRandom([0.5, 0.25]).nextDouble,
+        ).execute(() async {
+          attempts++;
+          if (attempts < 3) {
+            throw const SocketException('offline');
+          }
+          return 'ready';
+        });
 
         expect(result, 'ready');
         expect(randomValues, [0.5, 0.25]);
@@ -564,15 +551,12 @@ final class FakeSleeper {
 }
 
 final class CancellingSleeper {
-  CancellingSleeper(this.token);
-
-  final CancellationToken token;
   final delays = <Duration>[];
 
-  Future<void> sleep(Duration delay, CancellationToken? _) async {
+  Future<void> sleep(Duration delay, CancellationToken? token) async {
     delays.add(delay);
-    token.cancel();
-    token.throwIfCancelled();
+    token?.cancel();
+    token?.throwIfCancelled();
   }
 }
 

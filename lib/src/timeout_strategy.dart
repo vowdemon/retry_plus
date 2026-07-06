@@ -51,13 +51,12 @@ final class TimeoutStrategy<T> implements PipelineStrategy<T> {
     Future<T> Function() next,
   ) async {
     final duration = perAttempt ?? overall;
-    final scope = perAttempt != null
-        ? TimeoutScope.perAttempt
-        : TimeoutScope.overall;
+    final scope =
+        perAttempt != null ? TimeoutScope.perAttempt : TimeoutScope.overall;
     if (duration == null) {
       return next();
     }
-    context.cancellationToken?.throwIfCancelled();
+    context.cancellationToken.throwIfCancelled();
     try {
       return await context.runtime.timeout<T>(
         next(),

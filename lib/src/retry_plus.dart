@@ -8,6 +8,7 @@ export 'outcome.dart';
 export 'pipeline.dart';
 export 'retry_context.dart';
 export 'retry_policy.dart';
+export 'retry_future.dart';
 export 'retry_predicate.dart';
 export 'retry_strategy.dart';
 export 'runtime.dart';

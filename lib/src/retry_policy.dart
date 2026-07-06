@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'cancellation.dart';
 import 'circuit_breaker_strategy.dart';
 import 'delay.dart';
@@ -5,6 +7,7 @@ import 'events.dart';
 import 'fallback_strategy.dart';
 import 'pipeline.dart';
 import 'retry_predicate.dart';
+import 'retry_future.dart';
 import 'retry_strategy.dart';
 import 'runtime.dart';
 import 'stop.dart';
@@ -26,20 +29,18 @@ final class RetryPolicy<T> {
     RetryRuntime? runtime,
     DateTime Function()? clock,
     Future<void> Function(Duration delay, CancellationToken? cancellationToken)?
-    sleeper,
+        sleeper,
     double Function()? random,
-  }) : retry =
-           retry ??
-           RetryStrategy<T>(
-             stop: stop,
-             delay: delay,
-             retryIf: retryIf,
-             onRetry: onRetry,
-             onGiveUp: onGiveUp,
-           ),
-       runtime =
-           runtime ??
-           RetryRuntime(clock: clock, sleeper: sleeper, random: random);
+  })  : retry = retry ??
+            RetryStrategy<T>(
+              stop: stop,
+              delay: delay,
+              retryIf: retryIf,
+              onRetry: onRetry,
+              onGiveUp: onGiveUp,
+            ),
+        runtime = runtime ??
+            RetryRuntime(clock: clock, sleeper: sleeper, random: random);
 
   /// Retry strategy used by this policy.
   final RetryStrategy<T> retry;
@@ -57,23 +58,12 @@ final class RetryPolicy<T> {
   final RetryRuntime runtime;
 
   /// Executes an async [operation] under this policy.
-  Future<T> execute(
-    Future<T> Function() operation, {
+  RetryFuture<T> execute(
+    FutureOr<T> Function() operation, {
     CancellationToken? cancellationToken,
   }) {
     return _buildPipeline().execute(
       operation,
-      cancellationToken: cancellationToken,
-    );
-  }
-
-  /// Executes a sync [operation] using the same engine as async execution.
-  Future<T> executeSync(
-    T Function() operation, {
-    CancellationToken? cancellationToken,
-  }) {
-    return execute(
-      () async => operation(),
       cancellationToken: cancellationToken,
     );
   }
@@ -102,8 +92,8 @@ final class RetryPolicy<T> {
 }
 
 /// Executes [operation] once with a temporary [RetryPolicy].
-Future<T> retry<T>(
-  Future<T> Function() operation, {
+RetryFuture<T> retry<T>(
+  FutureOr<T> Function() operation, {
   int? attempts,
   StopStrategy? stop,
   DelayStrategy? delay,

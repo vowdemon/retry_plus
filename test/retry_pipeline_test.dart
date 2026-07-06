@@ -342,7 +342,7 @@ final class _ObservingStrategy<T> implements PipelineStrategy<T> {
     observations.add(
       'attempt=${context.attemptNumber} '
       'elapsed=${context.elapsed} '
-      'cancelled=${context.cancellationToken?.isCancelled ?? false}',
+      'cancelled=${context.cancellationToken.isCancelled}',
     );
     context.emit(
       const PipelineEvent(

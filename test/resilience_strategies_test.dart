@@ -95,9 +95,8 @@ void main() {
     test('fallback predicates support OR AND and NOT composition', () async {
       final handlesStateOrArgument =
           FallbackPredicate.exceptionType<StateError, int>() |
-          FallbackPredicate.exceptionType<ArgumentError, int>();
-      final excludesState =
-          FallbackPredicate<int>.any() &
+              FallbackPredicate.exceptionType<ArgumentError, int>();
+      final excludesState = FallbackPredicate<int>.any() &
           ~FallbackPredicate.exceptionType<StateError, int>();
 
       final statePolicy = RetryPolicy<int>(
@@ -148,8 +147,7 @@ void main() {
     test(
       'custom predicates compose with built-in fallback predicates',
       () async {
-        final predicate =
-            const _FallbackOnMessage('transient') &
+        final predicate = const _FallbackOnMessage('transient') &
             FallbackPredicate.exceptionType<StateError, int>() &
             ~FallbackPredicate.exceptionType<ArgumentError, int>();
         final policy = RetryPolicy<int>(
@@ -264,8 +262,7 @@ void main() {
       final breaker = CircuitBreakerStrategy(
         failureThreshold: 1,
         recoveryDuration: const Duration(minutes: 1),
-        failureIf:
-            CircuitFailurePredicate.exceptionType<StateError>() &
+        failureIf: CircuitFailurePredicate.exceptionType<StateError>() &
             ~CircuitFailurePredicate.exceptionType<ArgumentError>(),
       );
       final policy = RetryPolicy<int>(circuitBreaker: breaker);
@@ -320,8 +317,7 @@ void main() {
         final breaker = CircuitBreakerStrategy(
           failureThreshold: 1,
           recoveryDuration: const Duration(minutes: 1),
-          failureIf:
-              const _CircuitFailureOnMessage('transient') &
+          failureIf: const _CircuitFailureOnMessage('transient') &
               CircuitFailurePredicate.exceptionType<StateError>() &
               ~CircuitFailurePredicate.exceptionType<ArgumentError>(),
         );
@@ -345,8 +341,7 @@ void main() {
   group('strategy boolean logic', () {
     test('stop strategy AND requires both conditions', () {
       const outcome = AttemptOutcome.result(0);
-      final stop =
-          StopStrategy.afterAttempt(2) &
+      final stop = StopStrategy.afterAttempt(2) &
           StopStrategy.afterElapsed(const Duration(seconds: 5));
 
       expect(
@@ -372,8 +367,7 @@ void main() {
     });
 
     test('negated retry predicate excludes specific errors', () {
-      final predicate =
-          RetryPredicate<int>.exception() &
+      final predicate = RetryPredicate<int>.exception() &
           ~RetryPredicate.exceptionType<ArgumentError, int>();
 
       expect(

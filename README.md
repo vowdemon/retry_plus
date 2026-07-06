@@ -11,6 +11,7 @@ The main entry points are:
 - `retry<T>(...)` for one-off calls.
 - `RetryPolicy<T>` for reusable retry configuration.
 - `RetryPipeline<T>` for explicit strategy ordering.
+- `RetryFuture<T>` for awaiting, cancelling, and observing one execution.
 
 ## API Overview
 
@@ -21,7 +22,8 @@ The main entry points are:
 - Return fallback values or callback results after final failure.
 - Track circuit breaker state on a shared strategy instance.
 - Receive retry and give-up events.
-- Cancel cooperatively between attempts and during retry waits.
+- Cancel cooperatively through the returned retry future.
+- Observe the current retry execution phase.
 - Extend predicates, delays, stop rules, and pipeline strategies.
 
 ## Installation
@@ -85,7 +87,7 @@ Synchronous work uses the same engine:
 final config = await RetryPolicy<Map<String, Object?>>(
   stop: StopStrategy.afterAttempt(2),
   delay: DelayStrategy.none(),
-).executeSync(loadConfig);
+).execute(loadConfig);
 ```
 
 ## Fallbacks
@@ -143,17 +145,19 @@ Cancellation is cooperative. It is checked between attempts and during retry
 waits, but it does not forcibly interrupt a currently running operation.
 
 ```dart
-final token = CancellationToken();
-
 final future = retry(
   () async => fetchValue(),
   attempts: 5,
-  cancellationToken: token,
 );
 
-token.cancel();
+future.cancel();
 await future;
 ```
+
+The returned value is a `RetryFuture<T>`, so it can be awaited like a normal
+future while also exposing its `cancelToken` and current `phase`. When a
+caller-provided token is passed, the retry future exposes that same token;
+otherwise the execution creates one.
 
 ## Advanced Pipelines
 

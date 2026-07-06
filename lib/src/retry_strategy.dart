@@ -7,6 +7,7 @@ import 'exceptions.dart';
 import 'outcome.dart';
 import 'pipeline.dart';
 import 'retry_context.dart';
+import 'retry_future.dart';
 import 'retry_predicate.dart';
 import 'stop.dart';
 
@@ -19,14 +20,13 @@ final class RetryStrategy<T> implements PipelineStrategy<T> {
     RetryPredicate<T>? retryIf,
     this.onRetry,
     this.onGiveUp,
-  }) : stop = stop ?? StopStrategy.afterAttempt(3),
-       delay =
-           delay ??
-           DelayStrategy.exponential(
-             initial: const Duration(milliseconds: 200),
-             max: const Duration(seconds: 5),
-           ),
-       retryIf = retryIf ?? RetryPredicate<T>.exception();
+  })  : stop = stop ?? StopStrategy.afterAttempt(3),
+        delay = delay ??
+            DelayStrategy.exponential(
+              initial: const Duration(milliseconds: 200),
+              max: const Duration(seconds: 5),
+            ),
+        retryIf = retryIf ?? RetryPredicate<T>.exception();
 
   /// Strategy that decides when retrying must stop.
   final StopStrategy stop;
@@ -49,7 +49,7 @@ final class RetryStrategy<T> implements PipelineStrategy<T> {
     Future<T> Function() next,
   ) async {
     while (true) {
-      context.cancellationToken?.throwIfCancelled();
+      context.cancellationToken.throwIfCancelled();
       context.attemptNumber++;
 
       late final AttemptOutcome<T> outcome;
@@ -106,6 +106,7 @@ final class RetryStrategy<T> implements PipelineStrategy<T> {
           },
         ),
       );
+      context.setPhase(RetryPhase.waiting);
       await context.runtime.sleeper(computedDelay, context.cancellationToken);
     }
   }

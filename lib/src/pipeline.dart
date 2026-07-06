@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'cancellation.dart';
 import 'events.dart';
+import 'retry_future.dart';
 import 'runtime.dart';
 
 /// Strategy interface for wrapping pipeline execution.
@@ -17,14 +20,14 @@ final class PipelineContext<T> {
   PipelineContext({
     required this.runtime,
     required this.startedAt,
-    this.cancellationToken,
+    required this.cancellationToken,
   });
 
   /// Runtime dependencies for this execution.
   final RetryRuntime runtime;
 
   /// Cancellation token for this execution.
-  final CancellationToken? cancellationToken;
+  final CancellationToken cancellationToken;
 
   /// Time at which execution started.
   final DateTime startedAt;
@@ -32,9 +35,19 @@ final class PipelineContext<T> {
   /// Current attempt number.
   var attemptNumber = 0;
 
+  var _phase = RetryPhase.pending;
+
+  /// Current retry execution phase.
+  RetryPhase get phase => _phase;
+
   /// Emits a pipeline event.
   void emit(PipelineEvent event) {
     runtime.emit(event);
+  }
+
+  /// Updates the phase exposed by the returned retry future.
+  void setPhase(RetryPhase phase) {
+    _phase = phase;
   }
 
   /// Elapsed time since execution started.
@@ -47,8 +60,8 @@ final class RetryPipeline<T> {
   RetryPipeline({
     List<PipelineStrategy<T>> strategies = const [],
     RetryRuntime? runtime,
-  }) : strategies = List<PipelineStrategy<T>>.unmodifiable(strategies),
-       runtime = runtime ?? RetryRuntime();
+  })  : strategies = List<PipelineStrategy<T>>.unmodifiable(strategies),
+        runtime = runtime ?? RetryRuntime();
 
   /// Ordered strategies wrapping the operation.
   final List<PipelineStrategy<T>> strategies;
@@ -57,20 +70,35 @@ final class RetryPipeline<T> {
   final RetryRuntime runtime;
 
   /// Executes [operation] through the pipeline.
-  Future<T> execute(
-    Future<T> Function() operation, {
+  RetryFuture<T> execute(
+    FutureOr<T> Function() operation, {
     CancellationToken? cancellationToken,
-  }) async {
+  }) {
     final context = PipelineContext<T>(
       runtime: runtime,
       startedAt: runtime.clock(),
-      cancellationToken: cancellationToken,
+      cancellationToken: cancellationToken ?? CancellationToken(),
     );
+    final completer = Completer<T>();
+
+    scheduleMicrotask(() {
+      _run(operation, context, completer);
+    });
+
+    return _PipelineRetryFuture<T>(context, completer.future);
+  }
+
+  Future<void> _run(
+    FutureOr<T> Function() operation,
+    PipelineContext<T> context,
+    Completer<T> completer,
+  ) async {
     context.emit(const PipelineEvent(type: PipelineEventType.started));
 
     Future<T> invokeOperation() async {
-      cancellationToken?.throwIfCancelled();
-      return operation();
+      context.setPhase(RetryPhase.attempting);
+      context.cancellationToken.throwIfCancelled();
+      return Future<T>.sync(operation);
     }
 
     var next = invokeOperation;
@@ -82,15 +110,67 @@ final class RetryPipeline<T> {
     try {
       final result = await next();
       context.emit(const PipelineEvent(type: PipelineEventType.completed));
-      return result;
-    } on RetryCancelledException catch (error) {
+      context.setPhase(RetryPhase.completed);
+      completer.complete(result);
+    } catch (error, stackTrace) {
+      final cancelled = isCancellationError(error, context.cancellationToken);
       context.emit(
-        PipelineEvent(type: PipelineEventType.cancelled, error: error),
+        PipelineEvent(
+          type: cancelled
+              ? PipelineEventType.cancelled
+              : PipelineEventType.failed,
+          error: error,
+        ),
       );
-      rethrow;
-    } catch (error) {
-      context.emit(PipelineEvent(type: PipelineEventType.failed, error: error));
-      rethrow;
+      context.setPhase(cancelled ? RetryPhase.cancelled : RetryPhase.failed);
+      completer.completeError(error, stackTrace);
     }
+  }
+}
+
+final class _PipelineRetryFuture<T> implements RetryFuture<T> {
+  _PipelineRetryFuture(this._context, this._future);
+
+  final PipelineContext<T> _context;
+  final Future<T> _future;
+
+  @override
+  CancellationToken get cancelToken => _context.cancellationToken;
+
+  @override
+  RetryPhase get phase => _context.phase;
+
+  @override
+  void cancel([Object? reason]) {
+    _context.cancellationToken.cancel(reason);
+  }
+
+  @override
+  Stream<T> asStream() => _future.asStream();
+
+  @override
+  Future<T> catchError(
+    Function onError, {
+    bool Function(Object error)? test,
+  }) {
+    return _future.catchError(onError, test: test);
+  }
+
+  @override
+  Future<R> then<R>(
+    FutureOr<R> Function(T value) onValue, {
+    Function? onError,
+  }) {
+    return _future.then(onValue, onError: onError);
+  }
+
+  @override
+  Future<T> timeout(Duration timeLimit, {FutureOr<T> Function()? onTimeout}) {
+    return _future.timeout(timeLimit, onTimeout: onTimeout);
+  }
+
+  @override
+  Future<T> whenComplete(FutureOr<void> Function() action) {
+    return _future.whenComplete(action);
   }
 }

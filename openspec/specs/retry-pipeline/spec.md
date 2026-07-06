@@ -5,11 +5,15 @@ Defines the lower-level retry pipeline execution engine and strategy composition
 ## Requirements
 
 ### Requirement: Execute operations through a retry pipeline
-The package SHALL provide `RetryPipeline<T>` as the lower-level execution engine for applying ordered resilience strategies around `Future<T> Function()` and adapted synchronous operations.
+The package SHALL provide `RetryPipeline<T>` as the lower-level execution engine for applying ordered resilience strategies around `FutureOr<T> Function()` operations and returning `RetryFuture<T>`.
 
 #### Scenario: Pipeline executes operation without strategies
 - **WHEN** a caller executes an operation through an empty retry pipeline
-- **THEN** the pipeline returns the operation result or rethrows the operation error without changing behavior
+- **THEN** the returned `RetryFuture<T>` completes with the operation result or rethrows the operation error without changing behavior
+
+#### Scenario: Pipeline executes synchronous operation without strategies
+- **WHEN** a caller executes a synchronous operation through an empty retry pipeline
+- **THEN** the returned `RetryFuture<T>` completes with the synchronous result or synchronous error without changing behavior
 
 #### Scenario: Policy delegates to pipeline
 - **WHEN** a caller executes an operation through `RetryPolicy<T>`
@@ -31,11 +35,30 @@ The high-level policy SHALL apply strategies in the canonical order `Fallback ->
 - **THEN** the policy returns the fallback result after retry gives up
 
 ### Requirement: Share pipeline execution context
-The pipeline SHALL pass a shared execution context through strategies containing operation metadata, attempt metadata, cancellation token, runtime dependencies, and emitted events.
+The pipeline SHALL pass a shared execution context through strategies containing operation metadata, attempt metadata, cancellation token, retry phase, runtime dependencies, and emitted events.
 
 #### Scenario: Strategy receives shared context
 - **WHEN** a strategy runs inside a pipeline
 - **THEN** it can read the current context and add strategy-specific event metadata without losing existing context data
+
+#### Scenario: Context carries retry phase control
+- **WHEN** retry execution moves between lifecycle stages
+- **THEN** the shared pipeline context can update the phase exposed by the returned `RetryFuture<T>`
+
+### Requirement: Return future-compatible pipeline execution handle
+`RetryPipeline<T>.execute` SHALL return a `RetryFuture<T>` that is compatible with `Future<T>` and exposes execution cancellation and phase.
+
+#### Scenario: Pipeline retry future delegates future behavior
+- **WHEN** a caller uses `then`, `catchError`, `whenComplete`, `timeout`, `asStream`, or `await` on the returned retry future
+- **THEN** those operations behave as they would on the underlying execution future
+
+#### Scenario: Pipeline retry future exposes effective cancellation token
+- **WHEN** a caller executes an operation through a retry pipeline
+- **THEN** the returned retry future exposes the effective cancellation token for that pipeline execution
+
+#### Scenario: Pipeline retry future exposes phase
+- **WHEN** a caller executes an operation through a retry pipeline
+- **THEN** the returned retry future exposes the current `RetryPhase` for that pipeline execution
 
 ### Requirement: Surface pipeline events
 The pipeline SHALL emit lifecycle events for strategy decisions, retries, timeout failures, fallback execution, circuit breaker state changes, cancellation, and final completion.
