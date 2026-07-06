@@ -1,0 +1,12 @@
+name: retry_plus
+description: Composable retry policies for Dart with exception and result predicates, backoff, jitter, hooks, and cancellation.
+version: 0.1.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+
+dev_dependencies:
+  lints: ^6.0.0
+  test: ^1.25.6
