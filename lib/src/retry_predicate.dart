@@ -61,7 +61,8 @@ abstract class RetryPredicate<T>
 
 final class _ExceptionRetryPredicate<T> extends RetryPredicate<T> {
   @override
-  bool shouldRetry(AttemptOutcome<T> outcome) => outcome.hasError;
+  bool shouldRetry(AttemptOutcome<T> outcome) =>
+      outcome is AttemptOutcomeError<T>;
 }
 
 final class _ExceptionWhereRetryPredicate<T> extends RetryPredicate<T> {
@@ -71,9 +72,11 @@ final class _ExceptionWhereRetryPredicate<T> extends RetryPredicate<T> {
 
   @override
   bool shouldRetry(AttemptOutcome<T> outcome) {
-    final error = outcome.error;
-    final stackTrace = outcome.stackTrace;
-    return error != null && stackTrace != null && test(error, stackTrace);
+    return switch (outcome) {
+      AttemptOutcomeError(:final error, :final stackTrace) =>
+        test(error, stackTrace),
+      _ => false,
+    };
   }
 }
 
@@ -84,7 +87,10 @@ final class _ResultRetryPredicate<T> extends RetryPredicate<T> {
 
   @override
   bool shouldRetry(AttemptOutcome<T> outcome) {
-    return !outcome.hasError && test(outcome.result as T);
+    return switch (outcome) {
+      AttemptOutcomeResult(:final result) => test(result),
+      _ => false,
+    };
   }
 }
 

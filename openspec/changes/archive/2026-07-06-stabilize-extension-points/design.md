@@ -1,6 +1,6 @@
 ## Context
 
-`retry_plus` already exposes several abstraction points: `PipelineStrategy<T>`, `DelayStrategy`, `StopStrategy`, `RetryPredicate<T>`, `FallbackPredicate<T>`, `CircuitFailurePredicate`, and `Jitter`. These are the right boundaries for open/closed extensibility, but the public contract is not yet explicit enough. Some extension points require callers to write named classes even for small custom rules, and documentation does not clearly separate stable extension interfaces from built-in implementation details.
+`retry_plus` already exposes several abstraction points: `RetryPipelineStrategy<T>`, `DelayStrategy`, `StopStrategy`, `RetryPredicate<T>`, `FallbackPredicate<T>`, `CircuitFailurePredicate`, and `Jitter`. These are the right boundaries for open/closed extensibility, but the public contract is not yet explicit enough. Some extension points require callers to write named classes even for small custom rules, and documentation does not clearly separate stable extension interfaces from built-in implementation details.
 
 The package should remain a retry-focused package. It should not grow into a generic dependency injection framework or a full Polly-style builder surface. The existing split is the right one: `RetryPolicy<T>` is the convenient high-level facade, while `RetryPipeline<T>` is the lower-level open composition engine.
 
@@ -25,7 +25,7 @@ The package should remain a retry-focused package. It should not grow into a gen
 
 ### Keep `RetryPolicy<T>` opinionated and `RetryPipeline<T>` open
 
-`RetryPolicy<T>` should continue to build the canonical retry-oriented order used by the package. Users that need arbitrary composition should use `RetryPipeline<T>` directly with `PipelineStrategy<T>` implementations.
+`RetryPolicy<T>` should continue to build the canonical retry-oriented order used by the package. Users that need arbitrary composition should use `RetryPipeline<T>` directly with `RetryPipelineStrategy<T>` implementations.
 
 Alternative considered: add a Polly-like builder to `RetryPolicy<T>`. This would blur the package boundary and make the common API more complex. The current two-layer model keeps common use simple and advanced composition explicit.
 

@@ -3,6 +3,7 @@ import 'events.dart';
 import 'exceptions.dart';
 import 'pipeline.dart';
 import 'predicate.dart';
+import 'retry_context.dart';
 
 /// Context passed to fallback callbacks.
 final class FallbackContext<T> {
@@ -11,7 +12,7 @@ final class FallbackContext<T> {
     required this.failure,
     required this.stackTrace,
     required this.elapsed,
-    required this.pipelineContext,
+    required this.retryContext,
   });
 
   /// Final failure being handled.
@@ -23,8 +24,8 @@ final class FallbackContext<T> {
   /// Elapsed pipeline time.
   final Duration elapsed;
 
-  /// Pipeline context.
-  final PipelineContext<T> pipelineContext;
+  /// Retry context.
+  final RetryContext<T> retryContext;
 }
 
 /// Predicate that decides whether fallback handles a final failure.
@@ -88,7 +89,7 @@ abstract class FallbackPredicate<T>
 ///
 /// Cancellation always bypasses fallback handling, even when [fallbackIf] is
 /// [FallbackPredicate.any].
-final class FallbackStrategy<T> implements PipelineStrategy<T> {
+final class FallbackStrategy<T> implements RetryPipelineStrategy<T> {
   const FallbackStrategy._({required this.fallback, required this.fallbackIf});
 
   /// Creates fallback with a static [value].
@@ -118,7 +119,7 @@ final class FallbackStrategy<T> implements PipelineStrategy<T> {
 
   @override
   Future<T> execute(
-    PipelineContext<T> context,
+    RetryContext<T> context,
     Future<T> Function() next,
   ) async {
     try {
@@ -126,14 +127,14 @@ final class FallbackStrategy<T> implements PipelineStrategy<T> {
     } on RetryCancelledException {
       rethrow;
     } catch (error, stackTrace) {
-      if (isCancellationError(error, context.cancellationToken)) {
+      if (isCancellationError(error, context.cancelToken)) {
         Error.throwWithStackTrace(error, stackTrace);
       }
       final fallbackContext = FallbackContext<T>(
         failure: error,
         stackTrace: stackTrace,
         elapsed: context.elapsed,
-        pipelineContext: context,
+        retryContext: context,
       );
       if (!fallbackIf.shouldFallback(fallbackContext)) {
         rethrow;

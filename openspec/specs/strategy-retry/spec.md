@@ -221,12 +221,12 @@ The package SHALL preserve original exception identity and stack trace for final
 - **WHEN** retries stop after a retryable result outcome
 - **THEN** the policy throws `RetryExhaustedException<T>` containing the last result, attempts, elapsed time, and retry context
 
-### Requirement: Provide deterministic tests and examples
-The package SHALL include tests and examples that exercise the public retry policy behavior without relying on real-time sleeps.
+### Requirement: Provide behavior-focused tests and examples
+The package SHALL include tests and examples that exercise public retry policy behavior through real execution paths and focused strategy calculations.
 
-#### Scenario: Tests run without real retry delays
-- **WHEN** the test suite verifies delay, elapsed time, random jitter, and cancellation behavior
-- **THEN** the tests use deterministic time and randomness controls rather than waiting for production delays
+#### Scenario: Tests avoid runtime dependency injection
+- **WHEN** the test suite verifies elapsed time, retry delays, jitter, timeout, and cancellation behavior
+- **THEN** the tests use `package:clock`, direct delay strategy calculations, explicit callbacks, or short real timers instead of runtime dependency injection
 
 #### Scenario: Documentation examples stay valid
 - **WHEN** README and example usage demonstrate public APIs

@@ -35,7 +35,7 @@ The high-level policy SHALL apply strategies in the canonical order `Fallback ->
 - **THEN** the policy returns the fallback result after retry gives up
 
 ### Requirement: Share pipeline execution context
-The pipeline SHALL pass a shared execution context through strategies containing operation metadata, attempt metadata, cancellation token, retry phase, runtime dependencies, and emitted events.
+The pipeline SHALL pass a shared `RetryContext<T>` through strategies containing operation metadata, attempt metadata, cancellation token, retry phase, elapsed time, and event emission support.
 
 #### Scenario: Strategy receives shared context
 - **WHEN** a strategy runs inside a pipeline
@@ -61,7 +61,7 @@ The pipeline SHALL pass a shared execution context through strategies containing
 - **THEN** the returned retry future exposes the current `RetryPhase` for that pipeline execution
 
 ### Requirement: Surface pipeline events
-The pipeline SHALL emit lifecycle events for strategy decisions, retries, timeout failures, fallback execution, circuit breaker state changes, cancellation, and final completion.
+The pipeline SHALL emit lifecycle events for strategy decisions, retries, timeout failures, fallback execution, circuit breaker state changes, cancellation, and final completion through explicit `onEvent` callbacks.
 
 #### Scenario: Observer receives ordered events
 - **WHEN** a pipeline execution triggers multiple strategies
@@ -93,7 +93,7 @@ The pipeline SHALL preserve cancellation as cancellation across strategy boundar
 - **THEN** the caller receives the cancellation failure unless it is outside the pipeline and explicitly handled by caller code
 
 ### Requirement: Accept custom pipeline strategies
-`RetryPipeline<T>` SHALL accept caller-defined `PipelineStrategy<T>` implementations as first-class ordered strategies.
+`RetryPipeline<T>` SHALL accept caller-defined `RetryPipelineStrategy<T>` implementations as first-class ordered strategies.
 
 #### Scenario: Multiple custom strategies wrap operation in order
 - **WHEN** a caller constructs a pipeline with multiple custom strategies
@@ -101,7 +101,7 @@ The pipeline SHALL preserve cancellation as cancellation across strategy boundar
 
 #### Scenario: Custom strategy uses shared pipeline context
 - **WHEN** a custom pipeline strategy executes
-- **THEN** it receives the shared `PipelineContext<T>` with runtime dependencies, cancellation token, attempt metadata, elapsed time, and event emission support
+- **THEN** it receives the shared `RetryContext<T>` with cancellation, attempt metadata, elapsed time, and event emission support
 
 ### Requirement: Preserve canonical policy while allowing custom pipeline order
 The package SHALL keep `RetryPolicy<T>` canonical while allowing arbitrary custom order only through `RetryPipeline<T>`.

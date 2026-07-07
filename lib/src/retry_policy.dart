@@ -9,7 +9,6 @@ import 'pipeline.dart';
 import 'retry_predicate.dart';
 import 'retry_future.dart';
 import 'retry_strategy.dart';
-import 'runtime.dart';
 import 'stop.dart';
 import 'timeout_strategy.dart';
 
@@ -26,21 +25,15 @@ final class RetryPolicy<T> {
     this.timeout,
     this.fallback,
     this.circuitBreaker,
-    RetryRuntime? runtime,
-    DateTime Function()? clock,
-    Future<void> Function(Duration delay, CancellationToken? cancellationToken)?
-        sleeper,
-    double Function()? random,
-  })  : retry = retry ??
+    this.onEvent,
+  }) : retry = retry ??
             RetryStrategy<T>(
               stop: stop,
               delay: delay,
               retryIf: retryIf,
               onRetry: onRetry,
               onGiveUp: onGiveUp,
-            ),
-        runtime = runtime ??
-            RetryRuntime(clock: clock, sleeper: sleeper, random: random);
+            );
 
   /// Retry strategy used by this policy.
   final RetryStrategy<T> retry;
@@ -54,8 +47,8 @@ final class RetryPolicy<T> {
   /// Optional circuit breaker strategy.
   final CircuitBreakerStrategy? circuitBreaker;
 
-  /// Runtime dependencies for executions.
-  final RetryRuntime runtime;
+  /// Optional pipeline event observer.
+  final void Function(PipelineEvent event)? onEvent;
 
   /// Executes an async [operation] under this policy.
   RetryFuture<T> execute(
@@ -69,7 +62,7 @@ final class RetryPolicy<T> {
   }
 
   RetryPipeline<T> _buildPipeline() {
-    final strategies = <PipelineStrategy<T>>[];
+    final strategies = <RetryPipelineStrategy<T>>[];
 
     if (fallback != null) {
       strategies.add(fallback!);
@@ -87,7 +80,7 @@ final class RetryPolicy<T> {
       strategies.add(TimeoutStrategy<T>.perAttempt(perAttempt));
     }
 
-    return RetryPipeline<T>(strategies: strategies, runtime: runtime);
+    return RetryPipeline<T>(strategies: strategies, onEvent: onEvent);
   }
 }
 
@@ -103,6 +96,7 @@ RetryFuture<T> retry<T>(
   TimeoutStrategy<T>? timeout,
   FallbackStrategy<T>? fallback,
   CircuitBreakerStrategy? circuitBreaker,
+  void Function(PipelineEvent event)? onEvent,
   CancellationToken? cancellationToken,
 }) {
   return RetryPolicy<T>(
@@ -115,5 +109,6 @@ RetryFuture<T> retry<T>(
     timeout: timeout,
     fallback: fallback,
     circuitBreaker: circuitBreaker,
+    onEvent: onEvent,
   ).execute(operation, cancellationToken: cancellationToken);
 }

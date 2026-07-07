@@ -12,7 +12,7 @@ import 'retry_predicate.dart';
 import 'stop.dart';
 
 /// Retry configuration and pipeline strategy.
-final class RetryStrategy<T> implements PipelineStrategy<T> {
+final class RetryStrategy<T> implements RetryPipelineStrategy<T> {
   /// Creates a retry strategy.
   RetryStrategy({
     StopStrategy? stop,
@@ -45,12 +45,12 @@ final class RetryStrategy<T> implements PipelineStrategy<T> {
 
   @override
   Future<T> execute(
-    PipelineContext<T> context,
+    RetryContext<T> context,
     Future<T> Function() next,
   ) async {
     while (true) {
-      context.cancellationToken.throwIfCancelled();
-      context.attemptNumber++;
+      context.throwIfCancelled();
+      context.advanceAttempt();
 
       late final AttemptOutcome<T> outcome;
       try {
@@ -58,44 +58,42 @@ final class RetryStrategy<T> implements PipelineStrategy<T> {
       } on RetryCancelledException {
         rethrow;
       } catch (error, stackTrace) {
-        if (isCancellationError(error, context.cancellationToken)) {
+        if (isCancellationError(error, context.cancelToken)) {
           Error.throwWithStackTrace(error, stackTrace);
         }
         outcome = AttemptOutcome.error(error, stackTrace);
       }
+      context.outcome = outcome;
+      context.nextDelay = Duration.zero;
 
       if (!retryIf.shouldRetry(outcome)) {
-        if (outcome.hasError) {
-          Error.throwWithStackTrace(outcome.error!, outcome.stackTrace!);
-        }
-        return outcome.result as T;
+        return switch (outcome) {
+          AttemptOutcomeResult(:final result) => result,
+          AttemptOutcomeError(:final error, :final stackTrace) =>
+            Error.throwWithStackTrace(error, stackTrace),
+        };
       }
 
-      final retryContext = RetryContext<T>(
-        attemptNumber: context.attemptNumber,
-        elapsed: context.elapsed,
-        outcome: outcome,
-      );
       final computedDelay = delay.computeDelay(
-        retryContext,
-        context.runtime.random,
+        context,
+        context.random,
       );
-      final nextContext = retryContext.copyWith(nextDelay: computedDelay);
+      context.nextDelay = computedDelay;
 
-      if (stop.shouldStop(nextContext) ||
-          stop.shouldStopBeforeDelay(nextContext, computedDelay)) {
-        final event = RetryEvent<T>.giveUp(nextContext);
+      if (stop.shouldStop(context) ||
+          stop.shouldStopBeforeDelay(context, computedDelay)) {
+        final event = RetryEvent<T>.giveUp(context);
         onGiveUp?.call(event);
         context.emit(PipelineEvent(type: PipelineEventType.giveUp));
         _throwFinal(
           outcome,
           context.attemptNumber,
           context.elapsed,
-          nextContext,
+          context,
         );
       }
 
-      final event = RetryEvent<T>.retry(nextContext);
+      final event = RetryEvent<T>.retry(context);
       onRetry?.call(event);
       context.emit(
         PipelineEvent(
@@ -107,7 +105,7 @@ final class RetryStrategy<T> implements PipelineStrategy<T> {
         ),
       );
       context.setPhase(RetryPhase.waiting);
-      await context.runtime.sleeper(computedDelay, context.cancellationToken);
+      await context.sleep(computedDelay);
     }
   }
 
@@ -117,14 +115,16 @@ final class RetryStrategy<T> implements PipelineStrategy<T> {
     Duration elapsed,
     RetryContext<T> context,
   ) {
-    if (outcome.hasError) {
-      Error.throwWithStackTrace(outcome.error!, outcome.stackTrace!);
+    switch (outcome) {
+      case AttemptOutcomeResult(:final result):
+        throw RetryExhaustedException<T>(
+          lastResult: result,
+          attempts: attempts,
+          elapsed: elapsed,
+          context: context,
+        );
+      case AttemptOutcomeError(:final error, :final stackTrace):
+        Error.throwWithStackTrace(error, stackTrace);
     }
-    throw RetryExhaustedException<T>(
-      lastResult: outcome.result as T,
-      attempts: attempts,
-      elapsed: elapsed,
-      context: context,
-    );
   }
 }

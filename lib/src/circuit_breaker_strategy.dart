@@ -3,6 +3,7 @@ import 'events.dart';
 import 'exceptions.dart';
 import 'pipeline.dart';
 import 'predicate.dart';
+import 'retry_context.dart';
 
 /// Circuit breaker state.
 enum CircuitBreakerState {
@@ -46,8 +47,8 @@ abstract class CircuitFailurePredicate
 
   /// Counts ordinary failures except cancellation.
   factory CircuitFailurePredicate.any() => _CircuitFailureWherePredicate(
-    (context) => context.failure is! RetryCancelledException,
-  );
+        (context) => context.failure is! RetryCancelledException,
+      );
 
   /// Counts failures matching [test].
   factory CircuitFailurePredicate.where(
@@ -147,18 +148,19 @@ final class CircuitBreakerStrategy {
   }
 
   /// Returns this breaker as a typed pipeline strategy.
-  PipelineStrategy<T> asStrategy<T>() =>
-      _CircuitBreakerPipelineStrategy<T>(this);
+  RetryPipelineStrategy<T> asStrategy<T>() =>
+      _CircuitBreakerRetryPipelineStrategy<T>(this);
 }
 
-final class _CircuitBreakerPipelineStrategy<T> implements PipelineStrategy<T> {
-  const _CircuitBreakerPipelineStrategy(this.breaker);
+final class _CircuitBreakerRetryPipelineStrategy<T>
+    implements RetryPipelineStrategy<T> {
+  const _CircuitBreakerRetryPipelineStrategy(this.breaker);
 
   final CircuitBreakerStrategy breaker;
 
   @override
   Future<T> execute(
-    PipelineContext<T> context,
+    RetryContext<T> context,
     Future<T> Function() next,
   ) async {
     final breaker = this.breaker;
@@ -178,7 +180,7 @@ final class _CircuitBreakerPipelineStrategy<T> implements PipelineStrategy<T> {
     } on RetryCancelledException {
       rethrow;
     } catch (error, stackTrace) {
-      if (isCancellationError(error, context.cancellationToken)) {
+      if (isCancellationError(error, context.cancelToken)) {
         Error.throwWithStackTrace(error, stackTrace);
       }
       final failureContext = CircuitFailureContext(
@@ -192,7 +194,7 @@ final class _CircuitBreakerPipelineStrategy<T> implements PipelineStrategy<T> {
     }
   }
 
-  void _refreshState(PipelineContext<T> context) {
+  void _refreshState(RetryContext<T> context) {
     if (breaker._state != CircuitBreakerState.open) {
       return;
     }
@@ -200,8 +202,7 @@ final class _CircuitBreakerPipelineStrategy<T> implements PipelineStrategy<T> {
     if (openedAt == null) {
       return;
     }
-    if (context.runtime.clock().difference(openedAt) >=
-        breaker.recoveryDuration) {
+    if (context.now().difference(openedAt) >= breaker.recoveryDuration) {
       breaker._state = CircuitBreakerState.halfOpen;
       breaker._halfOpenSuccesses = 0;
       context.emit(
@@ -210,7 +211,7 @@ final class _CircuitBreakerPipelineStrategy<T> implements PipelineStrategy<T> {
     }
   }
 
-  void _recordSuccess(PipelineContext<T> context) {
+  void _recordSuccess(RetryContext<T> context) {
     if (breaker._state == CircuitBreakerState.halfOpen) {
       breaker._halfOpenSuccesses++;
       if (breaker._halfOpenSuccesses >= breaker.halfOpenSuccessThreshold) {
@@ -224,7 +225,7 @@ final class _CircuitBreakerPipelineStrategy<T> implements PipelineStrategy<T> {
     breaker._failures = 0;
   }
 
-  void _recordFailure(PipelineContext<T> context) {
+  void _recordFailure(RetryContext<T> context) {
     if (breaker._state == CircuitBreakerState.halfOpen) {
       _open(context);
       return;
@@ -235,9 +236,9 @@ final class _CircuitBreakerPipelineStrategy<T> implements PipelineStrategy<T> {
     }
   }
 
-  void _open(PipelineContext<T> context) {
+  void _open(RetryContext<T> context) {
     breaker._state = CircuitBreakerState.open;
-    breaker._openedAt = context.runtime.clock();
+    breaker._openedAt = context.now();
     breaker._halfOpenSuccesses = 0;
     context.emit(const PipelineEvent(type: PipelineEventType.circuitOpened));
   }

@@ -18,7 +18,7 @@
 
 ### Modified Capabilities
 
-- `retry-pipeline`: Clarifies that caller-defined `PipelineStrategy<T>` implementations are supported in ordered pipelines, including multiple custom strategies.
+- `retry-pipeline`: Clarifies that caller-defined `RetryPipelineStrategy<T>` implementations are supported in ordered pipelines, including multiple custom strategies.
 - `strategy-retry`: Adds explicit custom extension support for retry predicates, delay strategies, stop strategies, and jitter.
 - `fallback-strategy`: Adds explicit custom extension support for fallback predicates.
 - `circuit-breaker-strategy`: Adds explicit custom extension support for circuit failure predicates.

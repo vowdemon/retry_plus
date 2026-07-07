@@ -1,18 +1,17 @@
+import 'dart:async';
+
+import 'package:clock/clock.dart';
 import 'package:retry_plus/retry_plus.dart';
 import 'package:test/test.dart';
-
-import 'test_support.dart';
 
 void main() {
   group('timeout strategy', () {
     test('overall timeout reports overall scope', () async {
-      final runtime = FakeRuntime(timeoutScopesToThrow: [TimeoutScope.overall]);
       final policy = RetryPolicy<int>(
-        timeout: TimeoutStrategy.overall(const Duration(seconds: 5)),
-        runtime: runtime.value,
+        timeout: TimeoutStrategy.overall(const Duration(milliseconds: 1)),
       );
 
-      final call = policy.execute(() async => 1);
+      final call = policy.execute(() => Completer<int>().future);
 
       await expectLater(
         call,
@@ -209,23 +208,24 @@ void main() {
     });
 
     test('half-open successful probe closes circuit', () async {
-      final runtime = FakeRuntime();
+      final startedAt = DateTime(2026);
       final breaker = CircuitBreakerStrategy(
         failureThreshold: 1,
         recoveryDuration: const Duration(seconds: 10),
       );
-      final policy = RetryPolicy<int>(
-        circuitBreaker: breaker,
-        runtime: runtime.value,
-      );
+      final policy = RetryPolicy<int>(circuitBreaker: breaker);
 
-      await expectLater(
-        policy.execute(() async => throw StateError('down')),
-        throwsA(isA<StateError>()),
-      );
-      runtime.clock.advance(const Duration(seconds: 10));
+      await withClock(Clock.fixed(startedAt), () async {
+        await expectLater(
+          policy.execute(() async => throw StateError('down')),
+          throwsA(isA<StateError>()),
+        );
+      });
 
-      final result = await policy.execute(() async => 1);
+      final result = await withClock(
+        Clock.fixed(startedAt.add(const Duration(seconds: 10))),
+        () => policy.execute(() async => 1),
+      );
 
       expect(result, 1);
       expect(breaker.state, CircuitBreakerState.closed);
@@ -346,7 +346,7 @@ void main() {
 
       expect(
         stop.shouldStop(
-          const RetryContext<int>(
+          RetryContext<int>(
             attemptNumber: 2,
             elapsed: Duration(seconds: 1),
             outcome: outcome,
@@ -356,7 +356,7 @@ void main() {
       );
       expect(
         stop.shouldStop(
-          const RetryContext<int>(
+          RetryContext<int>(
             attemptNumber: 2,
             elapsed: Duration(seconds: 5),
             outcome: outcome,

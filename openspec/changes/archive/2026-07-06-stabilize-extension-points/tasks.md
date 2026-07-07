@@ -6,7 +6,7 @@
 
 ## 2. Pipeline Extension Coverage
 
-- [x] 2.1 Add tests proving multiple caller-defined `PipelineStrategy<T>` implementations execute in caller-provided order.
+- [x] 2.1 Add tests proving multiple caller-defined `RetryPipelineStrategy<T>` implementations execute in caller-provided order.
 - [x] 2.2 Add tests proving custom pipeline strategies can read shared context and emit observable pipeline events.
 - [x] 2.3 Keep `RetryPolicy<T>` canonical and add or update tests that distinguish high-level policy order from custom pipeline order.
 

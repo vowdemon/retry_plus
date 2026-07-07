@@ -2,6 +2,7 @@ import 'cancellation.dart';
 import 'events.dart';
 import 'exceptions.dart';
 import 'pipeline.dart';
+import 'retry_context.dart';
 
 /// Timeout scope for timeout strategy failures.
 enum TimeoutScope {
@@ -13,7 +14,7 @@ enum TimeoutScope {
 }
 
 /// Strategy that limits execution time.
-final class TimeoutStrategy<T> implements PipelineStrategy<T> {
+final class TimeoutStrategy<T> implements RetryPipelineStrategy<T> {
   const TimeoutStrategy._({this.perAttempt, this.overall});
 
   /// Creates a per-attempt timeout strategy.
@@ -47,7 +48,7 @@ final class TimeoutStrategy<T> implements PipelineStrategy<T> {
 
   @override
   Future<T> execute(
-    PipelineContext<T> context,
+    RetryContext<T> context,
     Future<T> Function() next,
   ) async {
     final duration = perAttempt ?? overall;
@@ -56,13 +57,12 @@ final class TimeoutStrategy<T> implements PipelineStrategy<T> {
     if (duration == null) {
       return next();
     }
-    context.cancellationToken.throwIfCancelled();
+    context.throwIfCancelled();
     try {
-      return await context.runtime.timeout<T>(
+      return await context.timeout<T>(
         next(),
         duration,
         scope,
-        context.cancellationToken,
       );
     } on RetryTimeoutException catch (error) {
       context.emit(

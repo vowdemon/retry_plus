@@ -1,23 +1,26 @@
 /// Captures the result or error from one attempt.
-final class AttemptOutcome<T> {
-  const AttemptOutcome._({this.result, this.error, this.stackTrace});
+sealed class AttemptOutcome<T> {
+  const AttemptOutcome();
 
   /// Creates a successful result outcome.
-  const AttemptOutcome.result(T result) : this._(result: result);
+  const factory AttemptOutcome.result(T result) = AttemptOutcomeResult<T>;
 
   /// Creates an error outcome.
-  const AttemptOutcome.error(Object error, StackTrace stackTrace)
-    : this._(error: error, stackTrace: stackTrace);
+  const factory AttemptOutcome.error(Object error, StackTrace stackTrace) =
+      AttemptOutcomeError<T>;
+}
 
-  /// The returned result, when the attempt succeeded.
-  final T? result;
+/// A successful attempt outcome.
+final class AttemptOutcomeResult<T> extends AttemptOutcome<T> {
+  const AttemptOutcomeResult(this.result);
 
-  /// The thrown error, when the attempt failed.
-  final Object? error;
+  final T result;
+}
 
-  /// The captured stack trace, when the attempt failed.
-  final StackTrace? stackTrace;
+/// A failed attempt outcome.
+final class AttemptOutcomeError<T> extends AttemptOutcome<T> {
+  const AttemptOutcomeError(this.error, this.stackTrace);
 
-  /// Whether this outcome contains an error.
-  bool get hasError => error != null;
+  final Object error;
+  final StackTrace stackTrace;
 }

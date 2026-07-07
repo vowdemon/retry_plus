@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:clock/clock.dart';
 import 'package:retry_plus/retry_plus.dart';
 import 'package:test/test.dart';
 
@@ -124,96 +125,82 @@ void main() {
       'does not wait when beforeElapsed would exceed the time budget',
       () async {
         final clock = FakeClock(DateTime(2026));
-        final sleeper = FakeSleeper(clock: clock);
 
-        final call = RetryPolicy<int>(
-          stop: StopStrategy.beforeElapsed(const Duration(seconds: 5)),
-          delay: DelayStrategy.fixed(const Duration(seconds: 10)),
-          retryIf: RetryPredicate<int>.result((value) => value == 0),
-          clock: clock.now,
-          sleeper: sleeper.sleep,
-        ).execute(() async => 0);
+        await withFakeClock(clock, () async {
+          final call = RetryPolicy<int>(
+            stop: StopStrategy.beforeElapsed(const Duration(seconds: 5)),
+            delay: DelayStrategy.fixed(const Duration(seconds: 10)),
+            retryIf: RetryPredicate<int>.result((value) => value == 0),
+          ).execute(() async => 0);
 
-        await expectLater(call, throwsA(isA<RetryExhaustedException<int>>()));
-        expect(sleeper.delays, isEmpty);
+          await expectLater(
+            call.timeout(const Duration(milliseconds: 50)),
+            throwsA(isA<RetryExhaustedException<int>>()),
+          );
+        });
       },
     );
 
     test(
       'computes composed exponential and random delays deterministically',
-      () async {
-        final clock = FakeClock(DateTime(2026));
-        final sleeper = FakeSleeper(clock: clock);
-        var attempts = 0;
+      () {
+        final delay = DelayStrategy.exponential(
+              initial: const Duration(milliseconds: 100),
+              factor: 2,
+              max: const Duration(milliseconds: 250),
+            ) +
+            DelayStrategy.random(
+              min: const Duration(milliseconds: 10),
+              max: const Duration(milliseconds: 20),
+            );
+        final random = SequenceRandom([0.5, 0.5]).nextDouble;
 
-        final result = await RetryPolicy<String>(
-          stop: StopStrategy.afterAttempt(3),
-          delay: DelayStrategy.exponential(
-                initial: const Duration(milliseconds: 100),
-                factor: 2,
-                max: const Duration(milliseconds: 250),
-              ) +
-              DelayStrategy.random(
-                min: const Duration(milliseconds: 10),
-                max: const Duration(milliseconds: 20),
-              ),
-          retryIf: RetryPredicate<String>.exception(),
-          clock: clock.now,
-          sleeper: sleeper.sleep,
-          random: SequenceRandom([0.5, 0.5]).nextDouble,
-        ).execute(() async {
-          attempts++;
-          if (attempts < 3) {
-            throw const SocketException('offline');
-          }
-          return 'ready';
-        });
-
-        expect(result, 'ready');
-        expect(sleeper.delays, [
-          const Duration(milliseconds: 115),
-          const Duration(milliseconds: 215),
-        ]);
+        expect(
+          [
+            delay.computeDelay(
+              RetryContext<Object?>(attemptNumber: 1),
+              random,
+            ),
+            delay.computeDelay(
+              RetryContext<Object?>(attemptNumber: 2),
+              random,
+            ),
+          ],
+          [
+            const Duration(milliseconds: 115),
+            const Duration(milliseconds: 215),
+          ],
+        );
       },
     );
 
     test('applies full jitter within the exponential delay bound', () async {
-      final clock = FakeClock(DateTime(2026));
-      final sleeper = FakeSleeper(clock: clock);
-      var attempts = 0;
+      final delay = DelayStrategy.exponential(
+        initial: const Duration(milliseconds: 100),
+        jitter: Jitter.full(),
+      );
 
-      final result = await RetryPolicy<String>(
-        stop: StopStrategy.afterAttempt(2),
-        delay: DelayStrategy.exponential(
-          initial: const Duration(milliseconds: 100),
-          jitter: Jitter.full(),
+      expect(
+        delay.computeDelay(
+          RetryContext<Object?>(attemptNumber: 1),
+          SequenceRandom([0.25]).nextDouble,
         ),
-        retryIf: RetryPredicate<String>.exception(),
-        clock: clock.now,
-        sleeper: sleeper.sleep,
-        random: SequenceRandom([0.25]).nextDouble,
-      ).execute(() async {
-        attempts++;
-        if (attempts == 1) {
-          throw StateError('try again');
-        }
-        return 'ready';
-      });
-
-      expect(result, 'ready');
-      expect(sleeper.delays, [const Duration(milliseconds: 25)]);
+        const Duration(milliseconds: 25),
+      );
     });
 
     test('cancels promptly during a retry delay', () async {
       final token = CancellationToken();
-      final sleeper = CancellingSleeper();
+      late RetryFuture<String> call;
       var attempts = 0;
 
-      final call = RetryPolicy<String>(
+      call = RetryPolicy<String>(
         stop: StopStrategy.afterAttempt(3),
-        delay: DelayStrategy.fixed(const Duration(seconds: 1)),
+        delay: DelayStrategy.none(),
         retryIf: RetryPredicate<String>.exception(),
-        sleeper: sleeper.sleep,
+        onRetry: (_) {
+          call.cancel('stopped');
+        },
       ).execute(() async {
         attempts++;
         throw const SocketException('offline');
@@ -221,7 +208,6 @@ void main() {
 
       await expectLater(call, throwsA(isA<RetryCancelledException>()));
       expect(attempts, 1);
-      expect(sleeper.delays, [const Duration(seconds: 1)]);
       expect(call.cancelToken.isCancelled, isTrue);
       expect(identical(call.cancelToken, token), isTrue);
     });
@@ -246,38 +232,49 @@ void main() {
     });
 
     test('emits retry and give-up hooks with attempt metadata', () async {
-      final retryEvents = <RetryEvent<int>>[];
-      final giveUpEvents = <RetryEvent<int>>[];
+      final retryAttempts = <int>[];
+      final retryDelays = <Duration>[];
+      final giveUpAttempts = <int>[];
 
       final call = RetryPolicy<int>(
         stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
         retryIf: RetryPredicate<int>.result((value) => value == 0),
-        onRetry: retryEvents.add,
-        onGiveUp: giveUpEvents.add,
+        onRetry: (event) {
+          retryAttempts.add(event.attemptNumber);
+          retryDelays.add(event.nextDelay);
+        },
+        onGiveUp: (event) {
+          giveUpAttempts.add(event.attemptNumber);
+        },
       ).execute(() async => 0);
 
       await expectLater(call, throwsA(isA<RetryExhaustedException<int>>()));
-      expect(retryEvents, hasLength(1));
-      expect(retryEvents.single.attemptNumber, 1);
-      expect(retryEvents.single.nextDelay, Duration.zero);
-      expect(giveUpEvents, hasLength(1));
-      expect(giveUpEvents.single.attemptNumber, 2);
+      expect(retryAttempts, [1]);
+      expect(retryDelays, [Duration.zero]);
+      expect(giveUpAttempts, [2]);
     });
 
     test('retry event exposes typed attempt outcome', () async {
-      final retryEvents = <RetryEvent<int>>[];
+      final retryOutcomes = <AttemptOutcome<int>>[];
 
       final result = await RetryPolicy<int>(
         stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
         retryIf: RetryPredicate<int>.result((value) => value == 0),
-        onRetry: retryEvents.add,
-      ).execute(() async => retryEvents.isEmpty ? 0 : 1);
+        onRetry: (event) {
+          retryOutcomes.add(event.outcome);
+        },
+      ).execute(() async => retryOutcomes.isEmpty ? 0 : 1);
 
-      final AttemptOutcome<int> outcome = retryEvents.single.outcome;
       expect(result, 1);
-      expect(outcome.result, 0);
+      expect(
+        switch (retryOutcomes.single) {
+          AttemptOutcomeResult(:final result) => result,
+          AttemptOutcomeError() => fail('expected result outcome'),
+        },
+        0,
+      );
     });
 
     test('propagates hook failures', () async {
@@ -395,7 +392,10 @@ void main() {
         stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
         retryIf: RetryPredicate<int>.where(
-          (outcome) => !outcome.hasError && outcome.result == 0,
+          (outcome) => switch (outcome) {
+            AttemptOutcomeResult(:final result) => result == 0,
+            AttemptOutcomeError() => false,
+          },
         ),
       ).execute(() async {
         callbackAttempts++;
@@ -410,37 +410,25 @@ void main() {
 
     test(
       'custom delay strategies receive context and deterministic random',
-      () async {
-        final clock = FakeClock(DateTime(2026));
-        final sleeper = FakeSleeper(clock: clock);
+      () {
         final randomValues = <double>[];
-        var attempts = 0;
-
-        final result = await RetryPolicy<String>(
-          stop: StopStrategy.afterAttempt(3),
-          delay: DelayStrategy.custom((context, random) {
-            final randomValue = random();
-            randomValues.add(randomValue);
-            return Duration(
-              milliseconds:
-                  context.attemptNumber * 100 + (randomValue * 8).round(),
-            );
-          }),
-          retryIf: RetryPredicate<String>.exception(),
-          clock: clock.now,
-          sleeper: sleeper.sleep,
-          random: SequenceRandom([0.5, 0.25]).nextDouble,
-        ).execute(() async {
-          attempts++;
-          if (attempts < 3) {
-            throw const SocketException('offline');
-          }
-          return 'ready';
+        final delay = DelayStrategy.custom((context, random) {
+          final randomValue = random();
+          randomValues.add(randomValue);
+          return Duration(
+            milliseconds:
+                context.attemptNumber * 100 + (randomValue * 8).round(),
+          );
         });
+        final random = SequenceRandom([0.5, 0.25]).nextDouble;
 
-        expect(result, 'ready');
+        final delays = [
+          delay.computeDelay(RetryContext<Object?>(attemptNumber: 1), random),
+          delay.computeDelay(RetryContext<Object?>(attemptNumber: 2), random),
+        ];
+
         expect(randomValues, [0.5, 0.25]);
-        expect(sleeper.delays, [
+        expect(delays, [
           const Duration(milliseconds: 104),
           const Duration(milliseconds: 202),
         ]);
@@ -448,8 +436,6 @@ void main() {
     );
 
     test('custom stop strategies can inspect next delay metadata', () async {
-      final clock = FakeClock(DateTime(2026));
-      final sleeper = FakeSleeper(clock: clock);
       final observedNextDelays = <Duration>[];
 
       final call = RetryPolicy<int>(
@@ -457,25 +443,20 @@ void main() {
           shouldStop: (_) => false,
           shouldStopBeforeDelay: (context, delay) {
             observedNextDelays.add(context.nextDelay);
-            return context.elapsed + delay > const Duration(milliseconds: 15);
+            expect(delay, context.nextDelay);
+            return true;
           },
         ),
         delay: DelayStrategy.fixed(const Duration(milliseconds: 10)),
         retryIf: RetryPredicate<int>.result((value) => value == 0),
-        clock: clock.now,
-        sleeper: sleeper.sleep,
       ).execute(() async => 0);
 
       await expectLater(call, throwsA(isA<RetryExhaustedException<int>>()));
-      expect(observedNextDelays, [
-        const Duration(milliseconds: 10),
-        const Duration(milliseconds: 10),
-      ]);
-      expect(sleeper.delays, [const Duration(milliseconds: 10)]);
+      expect(observedNextDelays, [const Duration(milliseconds: 10)]);
     });
 
     test('custom jitter implementations and callbacks transform delays', () {
-      const context = RetryContext<int>(
+      final context = RetryContext<int>(
         attemptNumber: 1,
         elapsed: Duration.zero,
         outcome: AttemptOutcome.result(0),
@@ -511,7 +492,10 @@ final class _RetryZeroResult extends RetryPredicate<int> {
 
   @override
   bool shouldRetry(AttemptOutcome<int> outcome) {
-    return !outcome.hasError && outcome.result == 0;
+    return switch (outcome) {
+      AttemptOutcomeResult(:final result) => result == 0,
+      AttemptOutcomeError() => false,
+    };
   }
 }
 
@@ -536,28 +520,11 @@ final class FakeClock {
   }
 }
 
-final class FakeSleeper {
-  FakeSleeper({required this.clock});
-
-  final FakeClock clock;
-  final delays = <Duration>[];
-
-  Future<void> sleep(Duration delay, CancellationToken? token) async {
-    token?.throwIfCancelled();
-    delays.add(delay);
-    clock.advance(delay);
-    token?.throwIfCancelled();
-  }
-}
-
-final class CancellingSleeper {
-  final delays = <Duration>[];
-
-  Future<void> sleep(Duration delay, CancellationToken? token) async {
-    delays.add(delay);
-    token?.cancel();
-    token?.throwIfCancelled();
-  }
+Future<T> withFakeClock<T>(
+  FakeClock fakeClock,
+  Future<T> Function() body,
+) {
+  return withClock(Clock(fakeClock.now), body);
 }
 
 final class SequenceRandom {

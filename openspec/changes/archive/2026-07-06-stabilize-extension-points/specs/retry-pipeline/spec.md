@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Accept custom pipeline strategies
-`RetryPipeline<T>` SHALL accept caller-defined `PipelineStrategy<T>` implementations as first-class ordered strategies.
+`RetryPipeline<T>` SHALL accept caller-defined `RetryPipelineStrategy<T>` implementations as first-class ordered strategies.
 
 #### Scenario: Multiple custom strategies wrap operation in order
 - **WHEN** a caller constructs a pipeline with multiple custom strategies

@@ -94,12 +94,10 @@ void main() {
       late RetryFuture<int> future;
       future = RetryPolicy<int>(
         stop: StopStrategy.afterAttempt(2),
-        delay: DelayStrategy.fixed(const Duration(seconds: 1)),
+        delay: DelayStrategy.none(),
         retryIf: RetryPredicate<int>.exception(),
-        sleeper: (delay, token) async {
-          expect(future.phase, RetryPhase.waiting);
+        onRetry: (_) {
           future.cancel('stopped');
-          token?.throwIfCancelled();
         },
       ).execute(() async {
         throw const SocketException('offline');

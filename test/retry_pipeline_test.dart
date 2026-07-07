@@ -1,7 +1,8 @@
+import 'dart:async';
+
+import 'package:clock/clock.dart';
 import 'package:retry_plus/retry_plus.dart';
 import 'package:test/test.dart';
-
-import 'test_support.dart';
 
 void main() {
   group('RetryPipeline', () {
@@ -22,10 +23,9 @@ void main() {
 
     test('emits ordered pipeline events', () async {
       final events = <PipelineEvent>[];
-      final runtime = RetryRuntime(observer: events.add);
 
       final result = await RetryPipeline<int>(
-        runtime: runtime,
+        onEvent: events.add,
       ).execute(() async => 1);
 
       expect(result, 1);
@@ -65,16 +65,15 @@ void main() {
     test('custom strategy can read context and emit events', () async {
       final events = <PipelineEvent>[];
       final observations = <String>[];
-      final runtime = RetryRuntime(
-        clock: () => DateTime(2026, 1, 1, 12),
-        observer: events.add,
-      );
       final pipeline = RetryPipeline<int>(
-        runtime: runtime,
+        onEvent: events.add,
         strategies: [_ObservingStrategy<int>(observations)],
       );
 
-      final result = await pipeline.execute(() async => 5);
+      final result = await withClock(
+        Clock.fixed(DateTime(2026, 1, 1, 12)),
+        () => pipeline.execute(() async => 5),
+      );
 
       expect(result, 5);
       expect(observations, [
@@ -230,21 +229,19 @@ void main() {
 
     test('retry wraps per-attempt timeout', () async {
       var attempts = 0;
-      final runtime = FakeRuntime();
       final policy = RetryPolicy<int>(
-        timeout: TimeoutStrategy.perAttempt(const Duration(seconds: 1)),
+        timeout: TimeoutStrategy.perAttempt(const Duration(milliseconds: 1)),
         retry: RetryStrategy<int>(
           stop: StopStrategy.afterAttempt(2),
           delay: DelayStrategy.none(),
           retryIf: RetryPredicate.exceptionType<RetryTimeoutException, int>(),
         ),
-        runtime: runtime.value,
       );
 
       final result = await policy.execute(() async {
         attempts++;
         if (attempts == 1) {
-          return runtime.timeoutOperation<int>();
+          return Completer<int>().future;
         }
         return 5;
       });
@@ -257,16 +254,10 @@ void main() {
       'fallback handles retry exhaustion after per-attempt timeouts and opens circuit once',
       () async {
         var attempts = 0;
-        final retryEvents = <RetryEvent<int>>[];
-        final giveUpEvents = <RetryEvent<int>>[];
+        final retryAttempts = <int>[];
+        final giveUpAttempts = <int>[];
         final pipelineEvents = <PipelineEvent>[];
         Object? fallbackFailure;
-        final runtime = FakeRuntime(
-          timeoutScopesToThrow: [
-            TimeoutScope.perAttempt,
-            TimeoutScope.perAttempt,
-          ],
-        );
         final breaker = CircuitBreakerStrategy(
           failureThreshold: 1,
           recoveryDuration: const Duration(minutes: 1),
@@ -278,10 +269,14 @@ void main() {
             stop: StopStrategy.afterAttempt(2),
             delay: DelayStrategy.none(),
             retryIf: RetryPredicate.exceptionType<RetryTimeoutException, int>(),
-            onRetry: retryEvents.add,
-            onGiveUp: giveUpEvents.add,
+            onRetry: (event) {
+              retryAttempts.add(event.attemptNumber);
+            },
+            onGiveUp: (event) {
+              giveUpAttempts.add(event.attemptNumber);
+            },
           ),
-          timeout: TimeoutStrategy.perAttempt(const Duration(seconds: 1)),
+          timeout: TimeoutStrategy.perAttempt(const Duration(milliseconds: 1)),
           circuitBreaker: breaker,
           fallback: FallbackStrategy.callback(
             (context) {
@@ -291,30 +286,18 @@ void main() {
             fallbackIf:
                 FallbackPredicate.exceptionType<RetryTimeoutException, int>(),
           ),
-          runtime: RetryRuntime(
-            clock: runtime.clock.now,
-            sleeper: runtime.sleep,
-            timeout: runtime.timeout,
-            random: SequenceRandom([0.5]).nextDouble,
-            observer: pipelineEvents.add,
-          ),
+          onEvent: pipelineEvents.add,
         );
 
         final result = await policy.execute(() async {
           attempts++;
-          return attempts;
+          return Completer<int>().future;
         });
 
         expect(result, 99);
         expect(attempts, 2);
-        expect(runtime.timeouts, [
-          TimeoutScope.perAttempt,
-          TimeoutScope.perAttempt,
-        ]);
-        expect(retryEvents, hasLength(1));
-        expect(retryEvents.single.attemptNumber, 1);
-        expect(giveUpEvents, hasLength(1));
-        expect(giveUpEvents.single.attemptNumber, 2);
+        expect(retryAttempts, [1]);
+        expect(giveUpAttempts, [2]);
         expect(fallbackFailure, isA<RetryTimeoutException>());
         expect(breaker.state, CircuitBreakerState.open);
         expect(pipelineEvents.map((event) => event.type), [
@@ -332,17 +315,17 @@ void main() {
   });
 }
 
-final class _ObservingStrategy<T> implements PipelineStrategy<T> {
+final class _ObservingStrategy<T> implements RetryPipelineStrategy<T> {
   const _ObservingStrategy(this.observations);
 
   final List<String> observations;
 
   @override
-  Future<T> execute(PipelineContext<T> context, Future<T> Function() next) {
+  Future<T> execute(RetryContext<T> context, Future<T> Function() next) {
     observations.add(
       'attempt=${context.attemptNumber} '
       'elapsed=${context.elapsed} '
-      'cancelled=${context.cancellationToken.isCancelled}',
+      'cancelled=${context.isCancelled}',
     );
     context.emit(
       const PipelineEvent(
@@ -354,7 +337,7 @@ final class _ObservingStrategy<T> implements PipelineStrategy<T> {
   }
 }
 
-final class _TracingStrategy<T> implements PipelineStrategy<T> {
+final class _TracingStrategy<T> implements RetryPipelineStrategy<T> {
   const _TracingStrategy(this.name, this.trace);
 
   final String name;
@@ -362,7 +345,7 @@ final class _TracingStrategy<T> implements PipelineStrategy<T> {
 
   @override
   Future<T> execute(
-    PipelineContext<T> context,
+    RetryContext<T> context,
     Future<T> Function() next,
   ) async {
     trace.add('enter $name');

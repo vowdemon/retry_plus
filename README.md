@@ -229,14 +229,14 @@ final policy = RetryPolicy<int>(
 );
 ```
 
-For behavior that wraps execution, implement `PipelineStrategy<T>` and use an
+For behavior that wraps execution, implement `RetryPipelineStrategy<T>` and use an
 explicit `RetryPipeline<T>`.
 
 ```dart
-final class AuditStrategy<T> implements PipelineStrategy<T> {
+final class AuditStrategy<T> implements RetryPipelineStrategy<T> {
   @override
   Future<T> execute(
-    PipelineContext<T> context,
+    RetryContext<T> context,
     Future<T> Function() next,
   ) async {
     context.emit(

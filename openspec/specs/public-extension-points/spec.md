@@ -22,12 +22,12 @@ The package SHALL provide callback-based custom factories for extension points w
 - **WHEN** a caller configures custom behavior with a public callback factory
 - **THEN** the behavior runs with the same context and composition semantics as an equivalent named implementation
 
-### Requirement: Preserve deterministic custom behavior
-Custom extension behavior SHALL receive deterministic runtime inputs through existing context and runtime APIs instead of relying on hidden global state.
+### Requirement: Preserve testable custom behavior
+Custom extension behavior SHALL receive retry metadata through `RetryContext<T>` and SHALL be testable through public strategy APIs, `package:clock` time control, and explicit event callbacks instead of runtime dependency injection.
 
-#### Scenario: Custom behavior uses deterministic runtime inputs
-- **WHEN** tests configure deterministic clock, sleep, random, timeout, or observer behavior
-- **THEN** custom extensions observe the same deterministic inputs as built-in strategies
+#### Scenario: Custom behavior uses public testing paths
+- **WHEN** tests configure clock zones, direct delay calculations, timeout operations, or event callbacks
+- **THEN** custom extensions observe the same public behavior as built-in strategies
 
 ### Requirement: Keep extension model retry-focused
 The package SHALL keep custom extension support focused on retry execution, retry decisions, timing, fallback handling, circuit failure classification, and ordered pipeline wrapping.
