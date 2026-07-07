@@ -26,6 +26,16 @@ void main() {
       expect(stop | StopStrategy.afterAttempt(2), isA<StopStrategy>());
       expect(stop & StopStrategy.afterAttempt(2), isA<StopStrategy>());
     });
+
+    test('cancellation types can be extended by package users', () {
+      final token = _DomainCancellationToken();
+      const reason = _DomainCancelledException();
+
+      token.cancel(reason);
+
+      expect(token.isCancelled, isTrue);
+      expect(() => token.throwIfCancelled(), throwsA(same(reason)));
+    });
   });
 
   group('RetryPolicy', () {
@@ -486,6 +496,12 @@ void main() {
     });
   });
 }
+
+class _DomainCancelledException extends RetryCancelledException {
+  const _DomainCancelledException() : super('domain cancelled');
+}
+
+class _DomainCancellationToken extends CancellationToken {}
 
 final class _RetryZeroResult extends RetryPredicate<int> {
   const _RetryZeroResult();

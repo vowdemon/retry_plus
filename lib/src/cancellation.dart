@@ -1,5 +1,5 @@
 /// Thrown when retry execution is cancelled.
-final class RetryCancelledException implements Exception {
+class RetryCancelledException implements Exception {
   /// Creates a retry cancellation exception.
   const RetryCancelledException([this.message = 'Retry operation cancelled']);
 
@@ -11,7 +11,7 @@ final class RetryCancelledException implements Exception {
 }
 
 /// Cooperative cancellation token for retry waits and retry boundaries.
-final class CancellationToken {
+class CancellationToken {
   Object? _reason;
 
   /// Whether cancellation was requested.
