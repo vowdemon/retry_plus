@@ -1,5 +1,6 @@
 import 'outcome.dart';
 export 'pipeline_event.dart';
+import 'retry_predicate.dart';
 import 'retry_context.dart';
 
 /// Type of retry lifecycle event.
@@ -13,31 +14,40 @@ enum RetryEventType {
 
 /// Lifecycle metadata emitted by retry hooks.
 final class RetryEvent<T> {
-  const RetryEvent._(this.type, this.context);
+  const RetryEvent._(this.type, this.attempt);
 
   /// Creates a retry event.
-  const RetryEvent.retry(RetryContext<T> context)
-      : this._(RetryEventType.retry, context);
+  const RetryEvent.retry(RetryAttempt<T> attempt)
+      : this._(RetryEventType.retry, attempt);
 
   /// Creates a give-up event.
-  const RetryEvent.giveUp(RetryContext<T> context)
-      : this._(RetryEventType.giveUp, context);
+  const RetryEvent.giveUp(RetryAttempt<T> attempt)
+      : this._(RetryEventType.giveUp, attempt);
 
   /// Event kind.
   final RetryEventType type;
 
+  /// Full retry attempt metadata for this event.
+  final RetryAttempt<T> attempt;
+
   /// Full retry context for this event.
-  final RetryContext<T> context;
+  RetryContext<T> get context => attempt.context;
+
+  /// Zero-based retry index.
+  int get retryIndex => attempt.retryIndex;
 
   /// One-based attempt number.
-  int get attemptNumber => context.attemptNumber;
+  int get attemptNumber => attempt.attemptNumber;
 
   /// Elapsed time since execution started.
-  Duration get elapsed => context.elapsed;
+  Duration get elapsed => attempt.elapsed;
+
+  /// Duration of the attempt that produced this event.
+  Duration get attemptDuration => attempt.attemptDuration;
 
   /// Outcome from the attempt that produced this event.
-  AttemptOutcome<T> get outcome => context.outcome;
+  AttemptOutcome<T> get outcome => attempt.outcome;
 
   /// Delay planned before the next attempt.
-  Duration get nextDelay => context.nextDelay;
+  Duration get nextDelay => attempt.nextDelay;
 }

@@ -92,9 +92,8 @@ void main() {
       final customPipeline = RetryPipeline<int>(
         strategies: [
           RetryStrategy<int>(
-            stop: StopStrategy.afterAttempt(2),
             delay: DelayStrategy.none(),
-            retryIf: RetryPredicate<int>.exception(),
+            retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
           ),
           FallbackStrategy.value(7),
         ],
@@ -108,9 +107,8 @@ void main() {
       var policyAttempts = 0;
       final policy = RetryPolicy<int>(
         retry: RetryStrategy<int>(
-          stop: StopStrategy.afterAttempt(2),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.exception(),
+          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
         ),
         fallback: FallbackStrategy.value(7),
       );
@@ -132,9 +130,9 @@ void main() {
         strategies: [
           FallbackStrategy.value(7),
           RetryStrategy<int>(
-            stop: StopStrategy.afterAttempt(2),
             delay: DelayStrategy.none(),
-            retryIf: RetryPredicate<int>.result((value) => value == 0),
+            retryIf: RetryIf<int>.result((value) => value == 0) &
+                RetryIf<int>.maxRetries(1),
           ),
         ],
       );
@@ -144,7 +142,7 @@ void main() {
         return 0;
       });
 
-      expect(result, 7);
+      expect(result, 0);
       expect(attempts, 2);
     });
   });
@@ -158,9 +156,8 @@ void main() {
       );
       final policy = RetryPolicy<int>(
         retry: RetryStrategy<int>(
-          stop: StopStrategy.afterAttempt(3),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.exception(),
+          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(2),
         ),
         circuitBreaker: breaker,
         fallback: FallbackStrategy.value(
@@ -185,13 +182,13 @@ void main() {
       expect(breaker.state, CircuitBreakerState.open);
     });
 
-    test('fallback handles retry exhaustion', () async {
+    test('fallback does not handle final retry result', () async {
       var attempts = 0;
       final policy = RetryPolicy<int>(
         retry: RetryStrategy<int>(
-          stop: StopStrategy.afterAttempt(2),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.result((value) => value == 0),
+          retryIf: RetryIf<int>.result((value) => value == 0) &
+              RetryIf<int>.maxRetries(1),
         ),
         fallback: FallbackStrategy.value(9),
       );
@@ -201,7 +198,7 @@ void main() {
         return 0;
       });
 
-      expect(result, 9);
+      expect(result, 0);
       expect(attempts, 2);
     });
 
@@ -210,9 +207,8 @@ void main() {
       final fallbackError = StateError('fallback failed');
       final policy = RetryPolicy<int>(
         retry: RetryStrategy<int>(
-          stop: StopStrategy.afterAttempt(2),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.result((value) => value == 0),
+          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
         ),
         fallback: FallbackStrategy.callback((_) => throw fallbackError),
       );
@@ -220,7 +216,7 @@ void main() {
       await expectLater(
         policy.execute(() async {
           attempts++;
-          return 0;
+          throw StateError('down');
         }),
         throwsA(same(fallbackError)),
       );
@@ -232,9 +228,9 @@ void main() {
       final policy = RetryPolicy<int>(
         timeout: TimeoutStrategy.perAttempt(const Duration(milliseconds: 1)),
         retry: RetryStrategy<int>(
-          stop: StopStrategy.afterAttempt(2),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate.exceptionType<RetryTimeoutException, int>(),
+          retryIf: RetryIf.exceptionType<RetryTimeoutException, int>() &
+              RetryIf<int>.maxRetries(1),
         ),
       );
 
@@ -266,9 +262,9 @@ void main() {
         );
         final policy = RetryPolicy<int>(
           retry: RetryStrategy<int>(
-            stop: StopStrategy.afterAttempt(2),
             delay: DelayStrategy.none(),
-            retryIf: RetryPredicate.exceptionType<RetryTimeoutException, int>(),
+            retryIf: RetryIf.exceptionType<RetryTimeoutException, int>() &
+                RetryIf<int>.maxRetries(1),
             onRetry: (event) {
               retryAttempts.add(event.attemptNumber);
             },
@@ -312,6 +308,108 @@ void main() {
         ]);
       },
     );
+  });
+
+  group('Polly-style timeout and retry ordering', () {
+    test('retry outside timeout retries per-attempt timeout failures',
+        () async {
+      var attempts = 0;
+      final retriedTimeoutScopes = <TimeoutScope>[];
+      final pipeline = RetryPipeline<int>(
+        strategies: [
+          RetryStrategy<int>(
+            delay: DelayStrategy.none(),
+            retryIf: RetryIf.exceptionType<RetryTimeoutException, int>() &
+                RetryIf<int>.maxRetries(1),
+            onRetry: (event) {
+              final outcome = event.outcome;
+              if (outcome is AttemptOutcomeError<int>) {
+                final error = outcome.error;
+                if (error is RetryTimeoutException) {
+                  retriedTimeoutScopes.add(error.scope);
+                }
+              }
+            },
+          ),
+          TimeoutStrategy<int>.perAttempt(const Duration(milliseconds: 1)),
+        ],
+      );
+
+      final result = await pipeline.execute(() {
+        attempts++;
+        if (attempts == 1) {
+          return Completer<int>().future;
+        }
+        return 5;
+      });
+
+      expect(result, 5);
+      expect(attempts, 2);
+      expect(retriedTimeoutScopes, [TimeoutScope.perAttempt]);
+    });
+
+    test('timeout outside retry stops pending retry attempts', () async {
+      var attempts = 0;
+      final pipeline = RetryPipeline<int>(
+        strategies: [
+          TimeoutStrategy<int>.overall(const Duration(milliseconds: 10)),
+          RetryStrategy<int>(
+            delay: DelayStrategy.fixed(const Duration(milliseconds: 20)),
+            retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(99),
+          ),
+        ],
+      );
+
+      await expectLater(
+        pipeline.execute(() {
+          attempts++;
+          throw StateError('down');
+        }),
+        throwsA(
+          isA<RetryTimeoutException>().having(
+            (error) => error.scope,
+            'scope',
+            TimeoutScope.overall,
+          ),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+
+      expect(attempts, 1);
+    });
+
+    test('outer timeout stops retry around inner per-attempt timeout',
+        () async {
+      var attempts = 0;
+      final pipeline = RetryPipeline<int>(
+        strategies: [
+          TimeoutStrategy<int>.overall(const Duration(milliseconds: 18)),
+          RetryStrategy<int>(
+            delay: DelayStrategy.fixed(const Duration(milliseconds: 5)),
+            retryIf: RetryIf.exceptionType<RetryTimeoutException, int>() &
+                RetryIf<int>.maxRetries(99),
+          ),
+          TimeoutStrategy<int>.perAttempt(const Duration(milliseconds: 5)),
+        ],
+      );
+
+      await expectLater(
+        pipeline.execute(() {
+          attempts++;
+          return Completer<int>().future;
+        }),
+        throwsA(
+          isA<RetryTimeoutException>().having(
+            (error) => error.scope,
+            'scope',
+            TimeoutScope.overall,
+          ),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+
+      expect(attempts, lessThanOrEqualTo(2));
+    });
   });
 }
 

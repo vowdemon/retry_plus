@@ -3,7 +3,7 @@
 Retry utilities for Dart and Flutter.
 
 `retry_plus` runs an operation again when its result or exception matches a
-retry predicate. It also includes optional timeout, fallback, circuit breaker,
+retry decision. It also includes optional timeout, fallback, circuit breaker,
 delay, hook, and cancellation support.
 
 The main entry points are:
@@ -16,7 +16,8 @@ The main entry points are:
 ## API Overview
 
 - Retry by exception or result.
-- Stop by attempt count or elapsed time.
+- Decide continuation with composable `retryIf` rules, including attempt and
+  retry-count budgets.
 - Wait with fixed, linear, exponential, random, composed, or jittered delays.
 - Apply per-attempt or overall timeouts.
 - Return fallback values or callback results after final failure.
@@ -24,7 +25,7 @@ The main entry points are:
 - Receive retry and give-up events.
 - Cancel cooperatively through the returned retry future.
 - Observe the current retry execution phase.
-- Extend predicates, delays, stop rules, and pipeline strategies.
+- Extend retry decisions, delays, hooks, and pipeline strategies.
 
 ## Installation
 
@@ -45,13 +46,12 @@ import 'package:retry_plus/retry_plus.dart';
 
 final value = await retry(
   () async => fetchValue(),
-  attempts: 3,
   delay: DelayStrategy.fixed(const Duration(milliseconds: 200)),
+  retryIf: RetryIf.exception() & RetryIf.maxRetries(2),
 );
 ```
 
-`attempts: 3` means three total attempts: the initial call and up to two
-additional attempts.
+`RetryIf.maxRetries(2)` means up to two retries after the initial attempt.
 
 ## Reusable Policies
 
@@ -61,16 +61,16 @@ place.
 ```dart
 final policy = RetryPolicy<HttpResponse>(
   retry: RetryStrategy(
-    stop: StopStrategy.afterAttempt(5),
     delay: DelayStrategy.exponential(
       initial: const Duration(milliseconds: 200),
       max: const Duration(seconds: 5),
       jitter: Jitter.full(),
     ),
-    retryIf: RetryPredicate<HttpResponse>.exception() |
-        RetryPredicate<HttpResponse>.result(
-          (response) => response.statusCode >= 500,
-        ),
+    retryIf: (RetryIf<HttpResponse>.exception() |
+            RetryIf<HttpResponse>.result(
+              (response) => response.statusCode >= 500,
+            )) &
+        RetryIf<HttpResponse>.maxRetries(4),
     onRetry: (event) {
       print('retry #${event.attemptNumber} after ${event.nextDelay}');
     },
@@ -85,8 +85,8 @@ Synchronous work uses the same engine:
 
 ```dart
 final config = await RetryPolicy<Map<String, Object?>>(
-  stop: StopStrategy.afterAttempt(2),
   delay: DelayStrategy.none(),
+  retryIf: RetryIf.exception() & RetryIf.maxRetries(1),
 ).execute(loadConfig);
 ```
 
@@ -97,9 +97,8 @@ Fallbacks run after the wrapped operation fails.
 ```dart
 final policy = RetryPolicy<String>(
   retry: RetryStrategy(
-    stop: StopStrategy.afterAttempt(2),
     delay: DelayStrategy.none(),
-    retryIf: RetryPredicate<String>.exception(),
+    retryIf: RetryIf<String>.exception() & RetryIf<String>.maxRetries(1),
   ),
   fallback: FallbackStrategy.value('cached value'),
 );
@@ -113,7 +112,7 @@ Fallback predicates can be composed with OR, AND, and NOT:
 final fallback = FallbackStrategy.value(
   'cached value',
   fallbackIf: FallbackPredicate.exceptionType<SocketException, String>() |
-      FallbackPredicate<String>.retryExhausted(),
+      FallbackPredicate.exceptionType<FormatException, String>(),
 );
 ```
 
@@ -147,7 +146,7 @@ waits, but it does not forcibly interrupt a currently running operation.
 ```dart
 final future = retry(
   () async => fetchValue(),
-  attempts: 5,
+  retryIf: RetryIf.exception() & RetryIf.maxRetries(4),
 );
 
 future.cancel();
@@ -178,8 +177,8 @@ final pipeline = RetryPipeline<String>(
   strategies: [
     TimeoutStrategy.overall(const Duration(seconds: 5)),
     RetryStrategy(
-      stop: StopStrategy.afterAttempt(3),
       delay: DelayStrategy.fixed(const Duration(milliseconds: 100)),
+      retryIf: RetryIf.exception() & RetryIf.maxRetries(2),
     ),
     FallbackStrategy.value('cached value'),
   ],
@@ -195,32 +194,33 @@ Use callback factories for small custom rules.
 ```dart
 final policy = RetryPolicy<HttpResponse>(
   retry: RetryStrategy(
-    stop: StopStrategy.custom(
-      shouldStop: (context) => context.attemptNumber >= 5,
-      shouldStopBeforeDelay: (context, delay) =>
-          context.elapsed + delay > const Duration(seconds: 30),
-    ),
     delay: DelayStrategy.custom((context, random) {
       final base = Duration(milliseconds: 100 * context.attemptNumber);
       final jitter = Duration(milliseconds: (random() * 50).round());
       return base + jitter;
     }),
-    retryIf: RetryPredicate<HttpResponse>.where((outcome) {
-      return outcome.hasError || (outcome.result?.statusCode ?? 0) >= 500;
-    }),
+    retryIf: (RetryIf<HttpResponse>.exception() |
+            RetryIf<HttpResponse>.result(
+              (response) => response.statusCode >= 500,
+            )) &
+        RetryIf<HttpResponse>.maxRetries(4),
   ),
+  timeout: TimeoutStrategy.overall(const Duration(seconds: 30)),
 );
 ```
 
 For domain-specific or reused rules, define named classes.
 
 ```dart
-final class RetryZeroResult extends RetryPredicate<int> {
+final class RetryZeroResult extends RetryIf<int> {
   const RetryZeroResult();
 
   @override
-  bool shouldRetry(AttemptOutcome<int> outcome) {
-    return !outcome.hasError && outcome.result == 0;
+  bool shouldRetryAttempt(RetryAttempt<int> attempt) {
+    return switch (attempt.outcome) {
+      AttemptOutcomeResult(:final result) => result == 0,
+      AttemptOutcomeError() => false,
+    };
   }
 }
 
@@ -262,9 +262,8 @@ final pipeline = RetryPipeline<String>(
 - Non-retryable exceptions are rethrown immediately.
 - If retrying stops after a retryable exception, the last exception is
   rethrown with its stack trace.
-- If retrying stops after retryable results, `RetryExhaustedException<T>` is
-  thrown with the last result and attempt metadata.
-- Per-attempt timeout can be retried when the retry predicate matches
+- If retrying stops after retryable results, the last result is returned.
+- Per-attempt timeout can be retried when the retry decision matches
   `RetryTimeoutException`.
 - Fallback runs outside retry and is not retried by default.
 - Fallback predicates support `|`, `&`, and `~` composition.

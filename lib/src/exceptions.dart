@@ -1,33 +1,4 @@
-import 'retry_context.dart';
 import 'timeout_strategy.dart';
-
-/// Thrown when retrying stopped after retryable results were exhausted.
-final class RetryExhaustedException<T> implements Exception {
-  /// Creates a retry exhausted exception.
-  const RetryExhaustedException({
-    required this.lastResult,
-    required this.attempts,
-    required this.elapsed,
-    required this.context,
-  });
-
-  /// Last retryable result returned by the operation.
-  final T lastResult;
-
-  /// Number of attempts performed.
-  final int attempts;
-
-  /// Elapsed time when retrying stopped.
-  final Duration elapsed;
-
-  /// Final retry context.
-  final RetryContext<T> context;
-
-  @override
-  String toString() {
-    return 'RetryExhaustedException: exhausted after $attempts attempts';
-  }
-}
 
 /// Thrown when a timeout strategy expires.
 final class RetryTimeoutException implements Exception {

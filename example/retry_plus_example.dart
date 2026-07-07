@@ -5,13 +5,12 @@ Future<void> main() async {
 
   final policy = RetryPolicy<String>(
     retry: RetryStrategy(
-      stop: StopStrategy.afterAttempt(3),
       delay: DelayStrategy.exponential(
         initial: const Duration(milliseconds: 100),
         max: const Duration(seconds: 1),
         jitter: Jitter.full(),
       ),
-      retryIf: RetryPredicate<String>.exception(),
+      retryIf: RetryIf<String>.exception() & RetryIf<String>.maxRetries(2),
       onRetry: (event) {
         print('attempt ${event.attemptNumber} failed; retrying');
       },

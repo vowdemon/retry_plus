@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'retry_predicate.dart';
 import 'retry_context.dart';
 
 /// Strategy that computes the wait before the next attempt.
@@ -66,12 +68,44 @@ abstract class DelayStrategy {
     return _RandomDelayStrategy(min: min, max: max);
   }
 
+  /// Decorrelated jitter delay with mutable state scoped to one execution.
+  static DelayStrategy decorrelatedJitter({
+    required Duration medianFirstRetryDelay,
+    Duration? max,
+  }) {
+    _checkPositiveDuration(medianFirstRetryDelay, 'medianFirstRetryDelay');
+    if (max != null) {
+      _checkPositiveDuration(max, 'max');
+      if (max < medianFirstRetryDelay) {
+        throw ArgumentError.value(
+          max,
+          'max',
+          'must be at least medianFirstRetryDelay',
+        );
+      }
+    }
+    return _DecorrelatedJitterDelayStrategy(
+      medianFirstRetryDelay: medianFirstRetryDelay,
+      max: max,
+    );
+  }
+
   /// Creates a delay strategy from [compute].
   static DelayStrategy custom(
     Duration Function(RetryContext<Object?> context, double Function() random)
-    compute,
+        compute,
   ) {
     return _CustomDelayStrategy(compute);
+  }
+
+  /// Creates an attempt-aware delay strategy from [compute].
+  static DelayStrategy generated(
+    FutureOr<Duration?> Function(
+      RetryAttempt<Object?> attempt,
+      double Function() random,
+    ) compute,
+  ) {
+    return _GeneratedDelayStrategy(compute);
   }
 
   /// Computes a retry delay for [context].
@@ -80,9 +114,22 @@ abstract class DelayStrategy {
     double Function() random,
   );
 
+  /// Computes a retry delay for [attempt].
+  FutureOr<Duration?> computeDelayForAttempt<T>(
+    RetryAttempt<T> attempt,
+    double Function() random,
+  ) {
+    return computeDelay(attempt.context, random);
+  }
+
   /// Adds two computed delays together.
   DelayStrategy operator +(DelayStrategy other) {
     return _SumDelayStrategy(this, other);
+  }
+
+  /// Uses [fallback] when this strategy produces no delay.
+  DelayStrategy fallbackTo(DelayStrategy fallback) {
+    return _FallbackDelayStrategy(this, fallback);
   }
 }
 
@@ -198,14 +245,38 @@ final class _RandomDelayStrategy extends DelayStrategy {
   }
 }
 
+final class _DecorrelatedJitterDelayStrategy extends DelayStrategy {
+  _DecorrelatedJitterDelayStrategy({
+    required this.medianFirstRetryDelay,
+    this.max,
+  });
+
+  final Duration medianFirstRetryDelay;
+  final Duration? max;
+  final Expando<int> _previousDelayMicros = Expando<int>();
+
+  @override
+  Duration computeDelay(
+    RetryContext<Object?> context,
+    double Function() random,
+  ) {
+    final baseMicros = medianFirstRetryDelay.inMicroseconds;
+    final previousMicros = _previousDelayMicros[context] ?? baseMicros;
+    final upperMicros = math.max(baseMicros, previousMicros * 3);
+    final jitteredMicros =
+        baseMicros + ((upperMicros - baseMicros) * random()).round();
+    _previousDelayMicros[context] = jitteredMicros;
+    return _clampDuration(Duration(microseconds: jitteredMicros), max);
+  }
+}
+
 final class _CustomDelayStrategy extends DelayStrategy {
   const _CustomDelayStrategy(this._compute);
 
   final Duration Function(
     RetryContext<Object?> context,
     double Function() random,
-  )
-  _compute;
+  ) _compute;
 
   @override
   Duration computeDelay(
@@ -214,6 +285,41 @@ final class _CustomDelayStrategy extends DelayStrategy {
   ) {
     final duration = _compute(context, random);
     _checkNonNegativeDuration(duration, 'custom delay');
+    return duration;
+  }
+}
+
+final class _GeneratedDelayStrategy extends DelayStrategy {
+  const _GeneratedDelayStrategy(this._compute);
+
+  final FutureOr<Duration?> Function(
+    RetryAttempt<Object?> attempt,
+    double Function() random,
+  ) _compute;
+
+  @override
+  Duration computeDelay(
+    RetryContext<Object?> context,
+    double Function() random,
+  ) {
+    throw UnsupportedError(
+      'Generated delays require retry attempt metadata. '
+      'Use computeDelayForAttempt instead.',
+    );
+  }
+
+  @override
+  FutureOr<Duration?> computeDelayForAttempt<T>(
+    RetryAttempt<T> attempt,
+    double Function() random,
+  ) async {
+    final duration = await _compute(
+      attempt as RetryAttempt<Object?>,
+      random,
+    );
+    if (duration != null) {
+      _checkNonNegativeDuration(duration, 'generated delay');
+    }
     return duration;
   }
 }
@@ -231,6 +337,50 @@ final class _SumDelayStrategy extends DelayStrategy {
   ) {
     return left.computeDelay(context, random) +
         right.computeDelay(context, random);
+  }
+
+  @override
+  FutureOr<Duration?> computeDelayForAttempt<T>(
+    RetryAttempt<T> attempt,
+    double Function() random,
+  ) async {
+    final leftDelay = await left.computeDelayForAttempt(attempt, random);
+    final rightDelay = await right.computeDelayForAttempt(attempt, random);
+    if (leftDelay == null || rightDelay == null) {
+      return null;
+    }
+    return leftDelay + rightDelay;
+  }
+}
+
+final class _FallbackDelayStrategy extends DelayStrategy {
+  const _FallbackDelayStrategy(this.primary, this.fallback);
+
+  final DelayStrategy primary;
+  final DelayStrategy fallback;
+
+  @override
+  Duration computeDelay(
+    RetryContext<Object?> context,
+    double Function() random,
+  ) {
+    try {
+      return primary.computeDelay(context, random);
+    } on UnsupportedError {
+      return fallback.computeDelay(context, random);
+    }
+  }
+
+  @override
+  FutureOr<Duration?> computeDelayForAttempt<T>(
+    RetryAttempt<T> attempt,
+    double Function() random,
+  ) async {
+    final primaryDelay = await primary.computeDelayForAttempt(attempt, random);
+    if (primaryDelay != null) {
+      return primaryDelay;
+    }
+    return fallback.computeDelayForAttempt(attempt, random);
   }
 }
 

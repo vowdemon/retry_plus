@@ -6,25 +6,158 @@ import 'package:retry_plus/retry_plus.dart';
 import 'package:test/test.dart';
 
 void main() {
+  group('unified retry decision', () {
+    test('retryIf receives typed attempt metadata', () async {
+      final seen = <RetryAttempt<int>>[];
+
+      final result = await RetryPolicy<int>(
+        delay: DelayStrategy.none(),
+        retryIf: RetryIf<int>.where((attempt) {
+          seen.add(attempt);
+          return attempt.outcome is AttemptOutcomeResult<int> &&
+              attempt.retryIndex == 0;
+        }),
+      ).execute(() async => seen.isEmpty ? 0 : 7);
+
+      expect(result, 7);
+      expect(seen, hasLength(2));
+      expect(seen.first.retryIndex, 0);
+      expect(seen.first.attemptNumber, 1);
+      expect(seen.first.elapsed, isA<Duration>());
+      expect(seen.first.attemptDuration, isA<Duration>());
+      expect(seen.first.context, isA<RetryContext<int>>());
+      expect(seen.first.nextDelay, Duration.zero);
+      expect(
+        switch (seen.first.outcome) {
+          AttemptOutcomeResult(:final result) => result,
+          AttemptOutcomeError() => fail('expected result outcome'),
+        },
+        0,
+      );
+    });
+
+    test('retryIf supports synchronous and asynchronous callbacks', () async {
+      var syncAttempts = 0;
+      final syncResult = await RetryPolicy<int>(
+        delay: DelayStrategy.none(),
+        retryIf: RetryIf<int>.where(
+          (attempt) =>
+              attempt.outcome is AttemptOutcomeError<int> &&
+              attempt.retryIndex < 1,
+        ),
+      ).execute(() {
+        syncAttempts++;
+        if (syncAttempts == 1) {
+          throw StateError('sync');
+        }
+        return 3;
+      });
+
+      var asyncAttempts = 0;
+      final asyncResult = await RetryPolicy<int>(
+        delay: DelayStrategy.none(),
+        retryIf: RetryIf<int>.where((attempt) async {
+          await Future<void>.delayed(Duration.zero);
+          return attempt.outcome is AttemptOutcomeError<int> &&
+              attempt.retryIndex < 1;
+        }),
+      ).execute(() {
+        asyncAttempts++;
+        if (asyncAttempts == 1) {
+          throw StateError('async');
+        }
+        return 5;
+      });
+
+      expect(syncResult, 3);
+      expect(syncAttempts, 2);
+      expect(asyncResult, 5);
+      expect(asyncAttempts, 2);
+    });
+
+    test('delay supports asynchronous generated durations', () async {
+      final observedDelays = <Duration>[];
+
+      final result = await RetryPolicy<int>(
+        retryIf: RetryIf<int>.result((value) => value == 0) &
+            RetryIf<int>.maxRetries(1),
+        delay: DelayStrategy.generated((attempt, random) async {
+          await Future<void>.delayed(Duration.zero);
+          return Duration(milliseconds: 2 + attempt.retryIndex);
+        }),
+        onRetry: (event) {
+          observedDelays.add(event.nextDelay);
+        },
+      ).execute(() async => observedDelays.isEmpty ? 0 : 5);
+
+      expect(result, 5);
+      expect(observedDelays, [const Duration(milliseconds: 2)]);
+    });
+
+    test('generated delay can fall back when it returns null', () async {
+      final observedDelays = <Duration>[];
+
+      final result = await RetryPolicy<int>(
+        retryIf: RetryIf<int>.result((value) => value == 0) &
+            RetryIf<int>.maxRetries(1),
+        delay: DelayStrategy.generated((attempt, random) => null)
+            .fallbackTo(DelayStrategy.fixed(const Duration(milliseconds: 3))),
+        onRetry: (event) {
+          observedDelays.add(event.nextDelay);
+        },
+      ).execute(() async => observedDelays.isEmpty ? 0 : 5);
+
+      expect(result, 5);
+      expect(observedDelays, [const Duration(milliseconds: 3)]);
+    });
+
+    test('stateful jitter remains scoped to one retry execution', () {
+      final delay = DelayStrategy.decorrelatedJitter(
+        medianFirstRetryDelay: const Duration(milliseconds: 100),
+      );
+      final firstContext = RetryContext<Object?>(attemptNumber: 1);
+      final secondContext = RetryContext<Object?>(attemptNumber: 1);
+      final firstRandom = SequenceRandom([0.5, 0.5]).nextDouble;
+      final secondRandom = SequenceRandom([0.5]).nextDouble;
+
+      final firstDelay = delay.computeDelay(firstContext, firstRandom);
+      final secondDelay = delay.computeDelay(firstContext, firstRandom);
+      final freshExecutionDelay =
+          delay.computeDelay(secondContext, secondRandom);
+
+      expect(firstDelay, const Duration(milliseconds: 200));
+      expect(secondDelay, const Duration(milliseconds: 350));
+      expect(freshExecutionDelay, firstDelay);
+    });
+
+    test('retryIf false does not compute delay', () async {
+      var delayComputed = false;
+
+      final result = await RetryPolicy<int>(
+        retryIf: RetryIf<int>.where((attempt) => false),
+        delay: DelayStrategy.generated((attempt, random) {
+          delayComputed = true;
+          return Duration.zero;
+        }),
+      ).execute(() async => 1);
+
+      expect(result, 1);
+      expect(delayComputed, isFalse);
+    });
+  });
+
   group('public composition interfaces', () {
-    test('predicates expose OR AND and NOT operators directly', () {
-      final retry = RetryPredicate<int>.any();
+    test('retry decisions expose OR AND and NOT operators directly', () {
+      final retry = RetryIf<int>.any();
       final fallback = FallbackPredicate<int>.any();
       final circuit = CircuitFailurePredicate.any();
 
-      expect(retry | RetryPredicate<int>.never(), isA<RetryPredicate<int>>());
+      expect(retry | RetryIf<int>.never(), isA<RetryIf<int>>());
       expect(
         fallback & FallbackPredicate<int>.any(),
         isA<FallbackPredicate<int>>(),
       );
       expect(~circuit, isA<CircuitFailurePredicate>());
-    });
-
-    test('stop strategies expose OR and AND operators directly', () {
-      final stop = StopStrategy.never();
-
-      expect(stop | StopStrategy.afterAttempt(2), isA<StopStrategy>());
-      expect(stop & StopStrategy.afterAttempt(2), isA<StopStrategy>());
     });
 
     test('cancellation types can be extended by package users', () {
@@ -60,9 +193,8 @@ void main() {
       var attempts = 0;
 
       final result = await RetryPolicy<String>(
-        stop: StopStrategy.afterAttempt(3),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<String>.exception(),
+        retryIf: RetryIf<String>.exception() & RetryIf<String>.maxRetries(2),
       ).execute(() async {
         attempts++;
         if (attempts < 3) {
@@ -80,9 +212,9 @@ void main() {
       final error = StateError('not transient');
 
       final call = RetryPolicy<String>(
-        stop: StopStrategy.afterAttempt(3),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate.exceptionType<SocketException, String>(),
+        retryIf: RetryIf.exceptionType<SocketException, String>() &
+            RetryIf<String>.maxRetries(2),
       ).execute(() async {
         attempts++;
         throw error;
@@ -92,15 +224,33 @@ void main() {
       expect(attempts, 1);
     });
 
+    test('rethrows final retry-handled exception with captured stack trace',
+        () async {
+      late StackTrace capturedStackTrace;
+
+      try {
+        await RetryPolicy<int>(
+          delay: DelayStrategy.none(),
+          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(0),
+        ).execute(_throwFromNamedOperation);
+        fail('expected operation to throw');
+      } catch (_, stackTrace) {
+        capturedStackTrace = stackTrace;
+      }
+
+      expect(
+          capturedStackTrace.toString(), contains('_throwFromNamedOperation'));
+    });
+
     test(
       'retries retryable results until a valid result is returned',
       () async {
         var attempts = 0;
 
         final result = await RetryPolicy<int>(
-          stop: StopStrategy.afterAttempt(3),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.result((value) => value < 10),
+          retryIf: RetryIf<int>.result((value) => value < 10) &
+              RetryIf<int>.maxRetries(2),
         ).execute(() async {
           attempts++;
           return attempts == 3 ? 42 : 0;
@@ -112,42 +262,21 @@ void main() {
     );
 
     test(
-      'throws RetryExhaustedException when retryable results are exhausted',
+      'returns the final result when retryable results are exhausted',
       () async {
-        final call = RetryPolicy<int>(
-          stop: StopStrategy.afterAttempt(2),
+        var attempts = 0;
+
+        final result = await RetryPolicy<int>(
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.result((value) => value < 10),
-        ).execute(() async => 0);
-
-        await expectLater(
-          call,
-          throwsA(
-            isA<RetryExhaustedException<int>>()
-                .having((error) => error.lastResult, 'lastResult', 0)
-                .having((error) => error.attempts, 'attempts', 2),
-          ),
-        );
-      },
-    );
-
-    test(
-      'does not wait when beforeElapsed would exceed the time budget',
-      () async {
-        final clock = FakeClock(DateTime(2026));
-
-        await withFakeClock(clock, () async {
-          final call = RetryPolicy<int>(
-            stop: StopStrategy.beforeElapsed(const Duration(seconds: 5)),
-            delay: DelayStrategy.fixed(const Duration(seconds: 10)),
-            retryIf: RetryPredicate<int>.result((value) => value == 0),
-          ).execute(() async => 0);
-
-          await expectLater(
-            call.timeout(const Duration(milliseconds: 50)),
-            throwsA(isA<RetryExhaustedException<int>>()),
-          );
+          retryIf: RetryIf<int>.result((value) => value < 10) &
+              RetryIf<int>.maxRetries(1),
+        ).execute(() async {
+          attempts++;
+          return 0;
         });
+
+        expect(result, 0);
+        expect(attempts, 2);
       },
     );
 
@@ -205,9 +334,8 @@ void main() {
       var attempts = 0;
 
       call = RetryPolicy<String>(
-        stop: StopStrategy.afterAttempt(3),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<String>.exception(),
+        retryIf: RetryIf<String>.exception() & RetryIf<String>.maxRetries(2),
         onRetry: (_) {
           call.cancel('stopped');
         },
@@ -227,9 +355,8 @@ void main() {
       final giveUpEvents = <RetryEvent<String>>[];
 
       final call = RetryPolicy<String>(
-        stop: StopStrategy.afterAttempt(3),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<String>.exception(),
+        retryIf: RetryIf<String>.exception() & RetryIf<String>.maxRetries(2),
         onGiveUp: giveUpEvents.add,
       ).execute(() async {
         attempts++;
@@ -246,10 +373,10 @@ void main() {
       final retryDelays = <Duration>[];
       final giveUpAttempts = <int>[];
 
-      final call = RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
+      final result = await RetryPolicy<int>(
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<int>.result((value) => value == 0),
+        retryIf: RetryIf<int>.result((value) => value == 0) &
+            RetryIf<int>.maxRetries(1),
         onRetry: (event) {
           retryAttempts.add(event.attemptNumber);
           retryDelays.add(event.nextDelay);
@@ -259,7 +386,7 @@ void main() {
         },
       ).execute(() async => 0);
 
-      await expectLater(call, throwsA(isA<RetryExhaustedException<int>>()));
+      expect(result, 0);
       expect(retryAttempts, [1]);
       expect(retryDelays, [Duration.zero]);
       expect(giveUpAttempts, [2]);
@@ -269,9 +396,9 @@ void main() {
       final retryOutcomes = <AttemptOutcome<int>>[];
 
       final result = await RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<int>.result((value) => value == 0),
+        retryIf: RetryIf<int>.result((value) => value == 0) &
+            RetryIf<int>.maxRetries(1),
         onRetry: (event) {
           retryOutcomes.add(event.outcome);
         },
@@ -287,13 +414,37 @@ void main() {
       );
     });
 
+    test('waits for asynchronous retry hooks before next attempt', () async {
+      var attempts = 0;
+      var hookCompleted = false;
+
+      final result = await RetryPolicy<int>(
+        delay: DelayStrategy.none(),
+        retryIf: RetryIf<int>.result((value) => value == 0) &
+            RetryIf<int>.maxRetries(1),
+        onRetry: (_) async {
+          await Future<void>.delayed(Duration.zero);
+          hookCompleted = true;
+        },
+      ).execute(() async {
+        attempts++;
+        if (attempts == 2) {
+          expect(hookCompleted, isTrue);
+        }
+        return attempts == 1 ? 0 : 1;
+      });
+
+      expect(result, 1);
+      expect(attempts, 2);
+    });
+
     test('propagates hook failures', () async {
       final hookError = StateError('hook failed');
 
       final call = RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<int>.result((value) => value == 0),
+        retryIf: RetryIf<int>.result((value) => value == 0) &
+            RetryIf<int>.maxRetries(1),
         onRetry: (_) => throw hookError,
       ).execute(() async => 0);
 
@@ -305,9 +456,8 @@ void main() {
       () async {
         var syncAttempts = 0;
         final syncResult = await RetryPolicy<int>(
-          stop: StopStrategy.afterAttempt(2),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.exception(),
+          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
         ).execute(() {
           syncAttempts++;
           if (syncAttempts == 1) {
@@ -325,8 +475,8 @@ void main() {
             }
             return 9;
           },
-          attempts: 2,
           delay: DelayStrategy.none(),
+          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
         );
 
         expect(syncResult, 7);
@@ -339,7 +489,7 @@ void main() {
 
   group('strategy validation', () {
     test('rejects invalid strategy inputs', () {
-      expect(() => StopStrategy.afterAttempt(0), throwsArgumentError);
+      expect(() => RetryIf<int>.maxRetries(-1), throwsArgumentError);
       expect(
         () => DelayStrategy.fixed(const Duration(milliseconds: -1)),
         throwsArgumentError,
@@ -361,8 +511,8 @@ void main() {
     });
   });
 
-  group('retry predicate composition', () {
-    test('preserves OR AND and NOT behavior', () {
+  group('retry decision composition', () {
+    test('preserves OR AND and NOT behavior', () async {
       final socketError = AttemptOutcome<int>.error(
         const SocketException('offline'),
         StackTrace.current,
@@ -373,25 +523,27 @@ void main() {
       );
       const retryableResult = AttemptOutcome.result(0);
 
-      final either = RetryPredicate.exceptionType<SocketException, int>() |
-          RetryPredicate<int>.result((value) => value == 0);
-      final both = RetryPredicate<int>.exception() &
-          ~RetryPredicate.exceptionType<ArgumentError, int>();
+      final either = RetryIf.exceptionType<SocketException, int>() |
+          RetryIf<int>.result((value) => value == 0);
+      final both = RetryIf<int>.exception() &
+          ~RetryIf.exceptionType<ArgumentError, int>();
 
-      expect(either.shouldRetry(socketError), isTrue);
-      expect(either.shouldRetry(retryableResult), isTrue);
-      expect(both.shouldRetry(socketError), isTrue);
-      expect(both.shouldRetry(argumentError), isFalse);
+      expect(await either.shouldRetryAttempt(_attempt(socketError)), isTrue);
+      expect(
+        await either.shouldRetryAttempt(_attempt(retryableResult)),
+        isTrue,
+      );
+      expect(await both.shouldRetryAttempt(_attempt(socketError)), isTrue);
+      expect(await both.shouldRetryAttempt(_attempt(argumentError)), isFalse);
     });
   });
 
   group('public retry extension points', () {
-    test('custom retry predicates control retry decisions', () async {
+    test('custom retry decisions control retry decisions', () async {
       var classAttempts = 0;
       final classResult = await RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
-        retryIf: const _RetryZeroResult(),
+        retryIf: const _RetryZeroResult() & RetryIf<int>.maxRetries(1),
       ).execute(() async {
         classAttempts++;
         return classAttempts == 1 ? 0 : 7;
@@ -399,10 +551,9 @@ void main() {
 
       var callbackAttempts = 0;
       final callbackResult = await RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<int>.where(
-          (outcome) => switch (outcome) {
+        retryIf: RetryIf<int>.where(
+          (attempt) => switch (attempt.outcome) {
             AttemptOutcomeResult(:final result) => result == 0,
             AttemptOutcomeError() => false,
           },
@@ -445,26 +596,6 @@ void main() {
       },
     );
 
-    test('custom stop strategies can inspect next delay metadata', () async {
-      final observedNextDelays = <Duration>[];
-
-      final call = RetryPolicy<int>(
-        stop: StopStrategy.custom(
-          shouldStop: (_) => false,
-          shouldStopBeforeDelay: (context, delay) {
-            observedNextDelays.add(context.nextDelay);
-            expect(delay, context.nextDelay);
-            return true;
-          },
-        ),
-        delay: DelayStrategy.fixed(const Duration(milliseconds: 10)),
-        retryIf: RetryPredicate<int>.result((value) => value == 0),
-      ).execute(() async => 0);
-
-      await expectLater(call, throwsA(isA<RetryExhaustedException<int>>()));
-      expect(observedNextDelays, [const Duration(milliseconds: 10)]);
-    });
-
     test('custom jitter implementations and callbacks transform delays', () {
       final context = RetryContext<int>(
         attemptNumber: 1,
@@ -503,16 +634,28 @@ class _DomainCancelledException extends RetryCancelledException {
 
 class _DomainCancellationToken extends CancellationToken {}
 
-final class _RetryZeroResult extends RetryPredicate<int> {
+final class _RetryZeroResult extends RetryIf<int> {
   const _RetryZeroResult();
 
   @override
-  bool shouldRetry(AttemptOutcome<int> outcome) {
-    return switch (outcome) {
+  bool shouldRetryAttempt(RetryAttempt<int> attempt) {
+    return switch (attempt.outcome) {
       AttemptOutcomeResult(:final result) => result == 0,
       AttemptOutcomeError() => false,
     };
   }
+}
+
+RetryAttempt<int> _attempt(AttemptOutcome<int> outcome) {
+  return RetryAttempt<int>(
+    outcome: outcome,
+    context: RetryContext<int>(attemptNumber: 1, outcome: outcome),
+    retryIndex: 0,
+    attemptNumber: 1,
+    elapsed: Duration.zero,
+    attemptDuration: Duration.zero,
+    nextDelay: Duration.zero,
+  );
 }
 
 final class _FixedJitter implements Jitter {
@@ -541,6 +684,10 @@ Future<T> withFakeClock<T>(
   Future<T> Function() body,
 ) {
   return withClock(Clock(fakeClock.now), body);
+}
+
+Future<int> _throwFromNamedOperation() async {
+  throw StateError('trace marker');
 }
 
 final class SequenceRandom {

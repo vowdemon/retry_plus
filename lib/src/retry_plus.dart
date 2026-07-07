@@ -11,5 +11,4 @@ export 'retry_policy.dart';
 export 'retry_future.dart';
 export 'retry_predicate.dart';
 export 'retry_strategy.dart';
-export 'stop.dart';
 export 'timeout_strategy.dart';

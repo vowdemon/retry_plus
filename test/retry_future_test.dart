@@ -43,7 +43,7 @@ void main() {
 
       final error = StateError('down');
       final failure = RetryPolicy<int>(
-        retryIf: RetryPredicate<int>.never(),
+        retryIf: RetryIf<int>.never(),
       ).execute(() async => throw error);
 
       expect(
@@ -55,9 +55,8 @@ void main() {
     test('executes synchronous operations through execute', () async {
       var attempts = 0;
       final result = await RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<int>.exception(),
+        retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
       ).execute(() {
         attempts++;
         if (attempts == 1) {
@@ -81,8 +80,8 @@ void main() {
           }
           return 9;
         },
-        attempts: 2,
         delay: DelayStrategy.none(),
+        retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
       );
 
       expect(result, 9);
@@ -93,9 +92,8 @@ void main() {
         () async {
       late RetryFuture<int> future;
       future = RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
         delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<int>.exception(),
+        retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
         onRetry: (_) {
           future.cancel('stopped');
         },
@@ -132,7 +130,7 @@ void main() {
     test('exposes failed phase after non-cancellation failure', () async {
       final error = StateError('down');
       final future = RetryPolicy<int>(
-        retryIf: RetryPredicate<int>.never(),
+        retryIf: RetryIf<int>.never(),
       ).execute(() async => throw error);
 
       await expectLater(future, throwsA(same(error)));

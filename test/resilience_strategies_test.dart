@@ -60,9 +60,8 @@ void main() {
       Object? capturedFailure;
       final policy = RetryPolicy<int>(
         retry: RetryStrategy<int>(
-          stop: StopStrategy.afterAttempt(1),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.exception(),
+          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(0),
         ),
         fallback: FallbackStrategy.callback((context) {
           capturedFailure = context.failure;
@@ -239,9 +238,8 @@ void main() {
       );
       final policy = RetryPolicy<int>(
         retry: RetryStrategy<int>(
-          stop: StopStrategy.afterAttempt(3),
           delay: DelayStrategy.none(),
-          retryIf: RetryPredicate<int>.exception(),
+          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(2),
         ),
         circuitBreaker: breaker,
       );
@@ -339,51 +337,83 @@ void main() {
   });
 
   group('strategy boolean logic', () {
-    test('stop strategy AND requires both conditions', () {
+    test('retry decision AND requires both conditions', () async {
       const outcome = AttemptOutcome.result(0);
-      final stop = StopStrategy.afterAttempt(2) &
-          StopStrategy.afterElapsed(const Duration(seconds: 5));
+      final retryIf = RetryIf<int>.result((value) => value == 0) &
+          RetryIf<int>.maxRetries(2);
 
       expect(
-        stop.shouldStop(
-          RetryContext<int>(
+        await retryIf.shouldRetryAttempt(
+          RetryAttempt<int>(
+            context: RetryContext<int>(
+              attemptNumber: 2,
+              elapsed: Duration(seconds: 1),
+              outcome: outcome,
+            ),
             attemptNumber: 2,
+            retryIndex: 1,
             elapsed: Duration(seconds: 1),
+            attemptDuration: Duration.zero,
+            nextDelay: Duration.zero,
+            outcome: outcome,
+          ),
+        ),
+        isTrue,
+      );
+      expect(
+        await retryIf.shouldRetryAttempt(
+          RetryAttempt<int>(
+            context: RetryContext<int>(
+              attemptNumber: 3,
+              elapsed: Duration.zero,
+              outcome: outcome,
+            ),
+            attemptNumber: 3,
+            retryIndex: 2,
+            elapsed: Duration.zero,
+            attemptDuration: Duration.zero,
+            nextDelay: Duration.zero,
             outcome: outcome,
           ),
         ),
         isFalse,
       );
+    });
+
+    test('negated retry decision excludes specific errors', () async {
+      final retryIf = RetryIf<int>.exception() &
+          ~RetryIf.exceptionType<ArgumentError, int>();
+
       expect(
-        stop.shouldStop(
-          RetryContext<int>(
-            attemptNumber: 2,
-            elapsed: Duration(seconds: 5),
-            outcome: outcome,
+        await retryIf.shouldRetryAttempt(
+          _attempt(
+            AttemptOutcome.error(StateError('retry'), StackTrace.current),
           ),
         ),
         isTrue,
       );
-    });
-
-    test('negated retry predicate excludes specific errors', () {
-      final predicate = RetryPredicate<int>.exception() &
-          ~RetryPredicate.exceptionType<ArgumentError, int>();
-
       expect(
-        predicate.shouldRetry(
-          AttemptOutcome.error(StateError('retry'), StackTrace.current),
-        ),
-        isTrue,
-      );
-      expect(
-        predicate.shouldRetry(
-          AttemptOutcome.error(ArgumentError('no'), StackTrace.current),
+        await retryIf.shouldRetryAttempt(
+          _attempt(
+            AttemptOutcome.error(ArgumentError('no'), StackTrace.current),
+          ),
         ),
         isFalse,
       );
     });
   });
+}
+
+RetryAttempt<int> _attempt(AttemptOutcome<int> outcome) {
+  return RetryAttempt<int>(
+    outcome: outcome,
+    context: RetryContext<int>(attemptNumber: 1, outcome: outcome),
+    retryIndex: 0,
+    attemptNumber: 1,
+    elapsed: Duration.zero,
+    attemptDuration: Duration.zero,
+    nextDelay: Duration.zero,
+  );
 }
 
 final class _FallbackOnMessage extends FallbackPredicate<int> {

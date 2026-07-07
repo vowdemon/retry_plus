@@ -75,13 +75,16 @@ final class RetryContext<T> {
   CancellationToken get cancelToken => _requireCancellationToken();
 
   /// Whether this execution has been cancelled.
-  bool get isCancelled => _cancellationToken?.isCancelled ?? false;
+  bool get isCancelled =>
+      _internalCancellationReason != null ||
+      (_cancellationToken?.isCancelled ?? false);
 
   Duration _elapsed;
   AttemptOutcome<T>? _outcome;
   final DateTime? _startedAt;
   final CancellationToken? _cancellationToken;
   final void Function(PipelineEvent event)? _onEvent;
+  Object? _internalCancellationReason;
   var _phase = RetryPhase.pending;
   static final _random = math.Random();
 
@@ -97,6 +100,10 @@ final class RetryContext<T> {
 
   /// Throws when the execution has been cancelled.
   void throwIfCancelled() {
+    final internalReason = _internalCancellationReason;
+    if (internalReason != null) {
+      _throwCancellationReason(internalReason);
+    }
     _requireCancellationToken().throwIfCancelled();
   }
 
@@ -131,10 +138,17 @@ final class RetryContext<T> {
     Duration duration,
     TimeoutScope scope,
   ) {
-    _requireCancellationToken().throwIfCancelled();
+    throwIfCancelled();
     return future.timeout(
       duration,
-      onTimeout: () => throw RetryTimeoutException(scope),
+      onTimeout: () {
+        if (scope == TimeoutScope.overall) {
+          _internalCancellationReason = const RetryCancelledException(
+            'Retry operation timed out',
+          );
+        }
+        throw RetryTimeoutException(scope);
+      },
     );
   }
 
@@ -144,5 +158,12 @@ final class RetryContext<T> {
       throw StateError('This retry context is not attached to an execution.');
     }
     return cancellationToken;
+  }
+
+  Never _throwCancellationReason(Object reason) {
+    if (reason is Exception || reason is Error) {
+      throw reason;
+    }
+    throw RetryCancelledException(reason.toString());
   }
 }

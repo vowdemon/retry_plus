@@ -63,7 +63,7 @@ abstract class CircuitFailurePredicate
   }
 
   @override
-  CircuitFailurePredicate addOr(
+  CircuitFailurePredicate or(
     CircuitFailurePredicate left,
     CircuitFailurePredicate right,
   ) {
@@ -71,7 +71,7 @@ abstract class CircuitFailurePredicate
   }
 
   @override
-  CircuitFailurePredicate addAnd(
+  CircuitFailurePredicate and(
     CircuitFailurePredicate left,
     CircuitFailurePredicate right,
   ) {
@@ -79,7 +79,7 @@ abstract class CircuitFailurePredicate
   }
 
   @override
-  CircuitFailurePredicate addNot(CircuitFailurePredicate inner) {
+  CircuitFailurePredicate not(CircuitFailurePredicate inner) {
     return _NotCircuitFailurePredicate(inner);
   }
 }
@@ -290,5 +290,5 @@ final class _NotCircuitFailurePredicate extends CircuitFailurePredicate {
   }
 
   @override
-  CircuitFailurePredicate addNot(CircuitFailurePredicate inner) => this.inner;
+  CircuitFailurePredicate not(CircuitFailurePredicate inner) => this.inner;
 }

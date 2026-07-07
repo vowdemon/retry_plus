@@ -1,6 +1,5 @@
 import 'cancellation.dart';
 import 'events.dart';
-import 'exceptions.dart';
 import 'pipeline.dart';
 import 'predicate.dart';
 import 'retry_context.dart';
@@ -51,20 +50,13 @@ abstract class FallbackPredicate<T>
     return _FallbackWherePredicate<T>(test);
   }
 
-  /// Handles retry-exhausted results.
-  factory FallbackPredicate.retryExhausted() {
-    return _FallbackWherePredicate<T>(
-      (context) => context.failure is RetryExhaustedException<T>,
-    );
-  }
-
   /// Handles final exceptions of type [E].
   static FallbackPredicate<T> exceptionType<E extends Object, T>() {
     return _FallbackWherePredicate<T>((context) => context.failure is E);
   }
 
   @override
-  FallbackPredicate<T> addOr(
+  FallbackPredicate<T> or(
     FallbackPredicate<T> left,
     FallbackPredicate<T> right,
   ) {
@@ -72,7 +64,7 @@ abstract class FallbackPredicate<T>
   }
 
   @override
-  FallbackPredicate<T> addAnd(
+  FallbackPredicate<T> and(
     FallbackPredicate<T> left,
     FallbackPredicate<T> right,
   ) {
@@ -80,7 +72,7 @@ abstract class FallbackPredicate<T>
   }
 
   @override
-  FallbackPredicate<T> addNot(FallbackPredicate<T> inner) {
+  FallbackPredicate<T> not(FallbackPredicate<T> inner) {
     return _NotFallbackPredicate<T>(inner);
   }
 }
@@ -201,5 +193,5 @@ final class _NotFallbackPredicate<T> extends FallbackPredicate<T> {
   }
 
   @override
-  FallbackPredicate<T> addNot(FallbackPredicate<T> inner) => this.inner;
+  FallbackPredicate<T> not(FallbackPredicate<T> inner) => this.inner;
 }

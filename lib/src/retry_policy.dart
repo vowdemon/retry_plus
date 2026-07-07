@@ -9,7 +9,6 @@ import 'pipeline.dart';
 import 'retry_predicate.dart';
 import 'retry_future.dart';
 import 'retry_strategy.dart';
-import 'stop.dart';
 import 'timeout_strategy.dart';
 
 /// A reusable retry policy facade for async and sync operations.
@@ -17,18 +16,16 @@ final class RetryPolicy<T> {
   /// Creates a retry policy.
   RetryPolicy({
     RetryStrategy<T>? retry,
-    StopStrategy? stop,
     DelayStrategy? delay,
-    RetryPredicate<T>? retryIf,
-    void Function(RetryEvent<T> event)? onRetry,
-    void Function(RetryEvent<T> event)? onGiveUp,
+    RetryIf<T>? retryIf,
+    FutureOr<void> Function(RetryEvent<T> event)? onRetry,
+    FutureOr<void> Function(RetryEvent<T> event)? onGiveUp,
     this.timeout,
     this.fallback,
     this.circuitBreaker,
     this.onEvent,
   }) : retry = retry ??
             RetryStrategy<T>(
-              stop: stop,
               delay: delay,
               retryIf: retryIf,
               onRetry: onRetry,
@@ -87,12 +84,10 @@ final class RetryPolicy<T> {
 /// Executes [operation] once with a temporary [RetryPolicy].
 RetryFuture<T> retry<T>(
   FutureOr<T> Function() operation, {
-  int? attempts,
-  StopStrategy? stop,
   DelayStrategy? delay,
-  RetryPredicate<T>? retryIf,
-  void Function(RetryEvent<T> event)? onRetry,
-  void Function(RetryEvent<T> event)? onGiveUp,
+  RetryIf<T>? retryIf,
+  FutureOr<void> Function(RetryEvent<T> event)? onRetry,
+  FutureOr<void> Function(RetryEvent<T> event)? onGiveUp,
   TimeoutStrategy<T>? timeout,
   FallbackStrategy<T>? fallback,
   CircuitBreakerStrategy? circuitBreaker,
@@ -100,8 +95,6 @@ RetryFuture<T> retry<T>(
   CancellationToken? cancellationToken,
 }) {
   return RetryPolicy<T>(
-    stop:
-        stop ?? (attempts == null ? null : StopStrategy.afterAttempt(attempts)),
     delay: delay,
     retryIf: retryIf,
     onRetry: onRetry,
