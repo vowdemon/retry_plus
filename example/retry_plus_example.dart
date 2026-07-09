@@ -4,17 +4,15 @@ Future<void> main() async {
   var attempts = 0;
 
   final policy = Retry<String>(
-    retry: RetryStrategy(
-      delay: DelayPolicy.exponential(
-        initial: const Duration(milliseconds: 100),
-        max: const Duration(seconds: 1),
-        jitter: Jitter.full(),
-      ),
-      retryIf: RetryIf<String>.exception() & RetryIf<String>.maxRetries(2),
-      onRetry: (event) {
-        print('attempt ${event.attemptNumber} failed; retrying');
-      },
+    delay: DelayPolicy.exponential(
+      initial: const Duration(milliseconds: 100),
+      max: const Duration(seconds: 1),
+      jitter: Jitter.full(),
     ),
+    maxRetries: 2,
+    onRetry: (event) {
+      print('attempt ${event.attemptNumber} failed; retrying');
+    },
     timeout: TimeoutStrategy(const Duration(seconds: 2)),
     fallback: FallbackStrategy.value('fallback value'),
   );

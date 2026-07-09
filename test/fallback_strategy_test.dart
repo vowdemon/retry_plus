@@ -25,10 +25,8 @@ void main() {
       Object? capturedFailure;
       Object? capturedHelperError;
       final policy = Retry<int>(
-        retry: RetryStrategy<int>(
-          delay: DelayPolicy.none(),
-          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(0),
-        ),
+        delay: DelayPolicy.none(),
+        maxRetries: 0,
         fallback: FallbackStrategy.callback((context) {
           capturedFailure = context.failure;
           capturedHelperError = context.error;

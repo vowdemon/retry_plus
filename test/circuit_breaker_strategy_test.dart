@@ -428,10 +428,8 @@ void main() {
         recoveryDuration: const Duration(minutes: 1),
       );
       final policy = Retry<int>(
-        retry: RetryStrategy<int>(
-          delay: DelayPolicy.none(),
-          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(2),
-        ),
+        delay: DelayPolicy.none(),
+        maxRetries: 2,
         circuitBreaker: breaker,
       );
 

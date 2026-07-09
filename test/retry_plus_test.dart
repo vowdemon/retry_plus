@@ -28,11 +28,83 @@ void main() {
   });
 
   group('Retry facade', () {
+    test('top-level retry executes with inline configuration', () async {
+      var attempts = 0;
+
+      final future = retry<int>(
+        () {
+          attempts++;
+          if (attempts == 1) {
+            throw StateError('try again');
+          }
+          return 11;
+        },
+        initialDelay: const Duration(microseconds: 1),
+        maxRetries: 1,
+      );
+
+      expect(future, isA<RetryFuture<int>>());
+      expect(await future, 11);
+      expect(attempts, 2);
+    });
+
+    test('top-level retry exposes exponential backoff parameters', () async {
+      final listener = InMemoryTelemetryListener();
+      var attempts = 0;
+
+      final result = await retry<int>(
+        () {
+          attempts++;
+          if (attempts < 3) {
+            throw StateError('try again');
+          }
+          return 13;
+        },
+        initialDelay: const Duration(milliseconds: 1),
+        delayFactor: 3,
+        maxDelay: const Duration(milliseconds: 2),
+        maxRetries: 2,
+        telemetry: TelemetryOptions(listeners: [listener]),
+      );
+
+      final scheduledDelays = listener.events
+          .where((event) => event.type == TelemetryEventType.retryScheduled)
+          .map((event) => event.attributes['nextDelay'])
+          .toList();
+
+      expect(result, 13);
+      expect(scheduledDelays, [
+        const Duration(milliseconds: 1),
+        const Duration(milliseconds: 2),
+      ]);
+    });
+
+    test('top-level retry appends retryIf to default exception handling',
+        () async {
+      var attempts = 0;
+
+      final result = await retry<int>(
+        () {
+          attempts++;
+          if (attempts == 1) {
+            throw StateError('default exception retry remains enabled');
+          }
+          return attempts == 2 ? 0 : 17;
+        },
+        initialDelay: const Duration(microseconds: 1),
+        maxRetries: 2,
+        retryIf: RetryIf<int>.result((value) => value == 0),
+      );
+
+      expect(result, 17);
+      expect(attempts, 3);
+    });
+
     test('call delegates to execute', () async {
       var attempts = 0;
       final retry = Retry<int>(
         delay: DelayPolicy.none(),
-        retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
+        maxRetries: 1,
       );
 
       final result = await retry(() async {

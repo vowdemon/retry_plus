@@ -11,12 +11,53 @@ import 'retry_strategy.dart';
 import 'telemetry.dart';
 import 'timeout_strategy.dart';
 
+/// Executes [operation] with one-off retry configuration.
+RetryFuture<T> retry<T>(
+  FutureOr<T> Function() operation, {
+  int maxRetries = 3,
+  Duration initialDelay = const Duration(milliseconds: 200),
+  double delayFactor = 2,
+  Duration? maxDelay = const Duration(seconds: 5),
+  Jitter? jitter,
+  RetryIf<T>? retryIf,
+  FutureOr<void> Function(RetryAttemptContext<T> attempt)? onRetry,
+  FutureOr<void> Function(RetryAttemptContext<T> attempt)? onGiveUp,
+  TimeoutStrategy<T>? timeout,
+  FallbackStrategy<T>? fallback,
+  CircuitBreaker? circuitBreaker,
+  TelemetryOptions telemetry = const TelemetryOptions(),
+  String? pipelineKey,
+  CancellationToken? cancellationToken,
+  String? operationKey,
+}) {
+  return Retry<T>(
+    maxRetries: maxRetries,
+    delay: DelayPolicy.exponential(
+      initial: initialDelay,
+      factor: delayFactor,
+      max: maxDelay,
+      jitter: jitter,
+    ),
+    retryIf: retryIf,
+    onRetry: onRetry,
+    onGiveUp: onGiveUp,
+    timeout: timeout,
+    fallback: fallback,
+    circuitBreaker: circuitBreaker,
+    telemetry: telemetry,
+    pipelineKey: pipelineKey,
+  ).execute(
+    operation,
+    cancellationToken: cancellationToken,
+    operationKey: operationKey,
+  );
+}
+
 /// A reusable retry facade for async and sync operations.
 final class Retry<T> {
   /// Creates a retry facade.
   Retry({
-    RetryStrategy<T>? retry,
-    String? retryName,
+    int maxRetries = 3,
     DelayPolicy? delay,
     RetryIf<T>? retryIf,
     FutureOr<void> Function(RetryAttemptContext<T> attempt)? onRetry,
@@ -26,14 +67,14 @@ final class Retry<T> {
     this.circuitBreaker,
     this.telemetry = const TelemetryOptions(),
     this.pipelineKey,
-  }) : retry = retry ??
-            RetryStrategy<T>(
-              name: retryName,
-              delay: delay,
-              retryIf: retryIf,
-              onRetry: onRetry,
-              onGiveUp: onGiveUp,
-            );
+  }) : retry = RetryStrategy<T>(
+          delay: delay,
+          retryIf: retryIf == null
+              ? RetryIf<T>.exception() & RetryIf<T>.maxRetries(maxRetries)
+              : retryIf & RetryIf<T>.maxRetries(maxRetries),
+          onRetry: onRetry,
+          onGiveUp: onGiveUp,
+        );
 
   /// Retry strategy used by this facade.
   final RetryStrategy<T> retry;

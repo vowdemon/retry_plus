@@ -8,9 +8,9 @@ rate limiter, hedging, delay, hook, and cancellation support.
 
 The main entry points are:
 
-- `Retry<T>` for one-off calls and reusable retry configuration.
+- `retry<T>()` for one-off calls with inline retry configuration.
+- `Retry<T>` for reusable retry configuration.
 - `RetryPipeline<T>` for explicit strategy ordering.
-- `RetryFuture<T>` for awaiting, cancelling, and observing one execution.
 
 ## API Overview
 
@@ -46,15 +46,17 @@ flutter pub add retry_plus
 ```dart
 import 'package:retry_plus/retry_plus.dart';
 
-final value = await Retry(
-  delay: DelayPolicy.fixed(const Duration(milliseconds: 200)),
-  retryIf: RetryIf.exception() & RetryIf.maxRetries(2),
-)(
+final value = await retry(
   () async => fetchValue(),
+  maxRetries: 2,
+  initialDelay: const Duration(milliseconds: 200),
+  delayFactor: 2,
+  maxDelay: const Duration(seconds: 5),
+  jitter: Jitter.full(),
 );
 ```
 
-`RetryIf.maxRetries(2)` means up to two retries after the initial attempt.
+`maxRetries: 2` means up to two retries after the initial attempt.
 
 ## Reusable Retry
 
@@ -63,21 +65,18 @@ place.
 
 ```dart
 final policy = Retry<HttpResponse>(
-  retry: RetryStrategy(
-    delay: DelayPolicy.exponential(
-      initial: const Duration(milliseconds: 200),
-      max: const Duration(seconds: 5),
-      jitter: Jitter.full(),
-    ),
-    retryIf: (RetryIf<HttpResponse>.exception() |
-            RetryIf<HttpResponse>.result(
-              (response) => response.statusCode >= 500,
-            )) &
-        RetryIf<HttpResponse>.maxRetries(4),
-    onRetry: (event) {
-      print('retry #${event.attemptNumber}');
-    },
+  maxRetries: 4,
+  delay: DelayPolicy.exponential(
+    initial: const Duration(milliseconds: 200),
+    max: const Duration(seconds: 5),
+    jitter: Jitter.full(),
   ),
+  retryIf: RetryIf<HttpResponse>.result(
+    (response) => response.statusCode >= 500,
+  ),
+  onRetry: (event) {
+    print('retry #${event.attemptNumber}');
+  },
   timeout: TimeoutStrategy(const Duration(seconds: 30)),
 );
 
@@ -89,7 +88,7 @@ Synchronous work uses the same engine:
 ```dart
 final config = await Retry<Map<String, Object?>>(
   delay: DelayPolicy.none(),
-  retryIf: RetryIf.exception() & RetryIf.maxRetries(1),
+  maxRetries: 1,
 ).execute(loadConfig);
 ```
 
@@ -99,10 +98,8 @@ Fallbacks run after the wrapped operation fails.
 
 ```dart
 final policy = Retry<String>(
-  retry: RetryStrategy(
-    delay: DelayPolicy.none(),
-    retryIf: RetryIf<String>.exception() & RetryIf<String>.maxRetries(1),
-  ),
+  delay: DelayPolicy.none(),
+  maxRetries: 1,
   fallback: FallbackStrategy.value('cached value'),
 );
 
@@ -261,9 +258,7 @@ final events = InMemoryTelemetryListener();
 final policy = Retry<String>(
   pipelineKey: 'user-api',
   telemetry: TelemetryOptions(listeners: [events]),
-  retry: RetryStrategy(
-    retryIf: RetryIf.exception() & RetryIf.maxRetries(2),
-  ),
+  maxRetries: 2,
 );
 
 final value = await policy.execute(
@@ -302,7 +297,7 @@ waits, but it does not forcibly interrupt a currently running operation.
 
 ```dart
 final future = Retry(
-  retryIf: RetryIf.exception() & RetryIf.maxRetries(4),
+  maxRetries: 4,
 )(
   () async => fetchValue(),
 );
@@ -394,17 +389,14 @@ Use callback factories for small custom rules.
 
 ```dart
 final policy = Retry<HttpResponse>(
-  retry: RetryStrategy(
-    delay: DelayPolicy.custom((context, random) {
-      final base = Duration(milliseconds: 100 * context.attemptNumber);
-      final jitter = Duration(milliseconds: (random() * 50).round());
-      return base + jitter;
-    }),
-    retryIf: (RetryIf<HttpResponse>.exception() |
-            RetryIf<HttpResponse>.result(
-              (response) => response.statusCode >= 500,
-            )) &
-        RetryIf<HttpResponse>.maxRetries(4),
+  maxRetries: 4,
+  delay: DelayPolicy.custom((context, random) {
+    final base = Duration(milliseconds: 100 * context.attemptNumber);
+    final jitter = Duration(milliseconds: (random() * 50).round());
+    return base + jitter;
+  }),
+  retryIf: RetryIf<HttpResponse>.result(
+    (response) => response.statusCode >= 500,
   ),
   timeout: TimeoutStrategy(const Duration(seconds: 30)),
 );

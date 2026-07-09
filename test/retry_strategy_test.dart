@@ -231,10 +231,14 @@ void main() {
       var attempts = 0;
       final error = StateError('not transient');
 
-      final call = Retry<String>(
-        delay: DelayPolicy.none(),
-        retryIf: RetryIf.exceptionType<SocketException, String>() &
-            RetryIf<String>.maxRetries(2),
+      final call = RetryPipeline<String>(
+        strategies: [
+          RetryStrategy<String>(
+            delay: DelayPolicy.none(),
+            retryIf: RetryIf.exceptionType<SocketException, String>() &
+                RetryIf<String>.maxRetries(2),
+          ),
+        ],
       ).execute(() async {
         attempts++;
         throw error;
@@ -251,7 +255,7 @@ void main() {
       try {
         await Retry<int>(
           delay: DelayPolicy.none(),
-          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(0),
+          maxRetries: 0,
         ).execute(_throwFromNamedOperation);
         fail('expected operation to throw');
       } catch (_, stackTrace) {
@@ -324,7 +328,7 @@ void main() {
 
         final call = Retry<int>(
           delay: DelayPolicy.none(),
-          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
+          maxRetries: 1,
         ).execute(() async {
           throw failures[attempts++];
         });

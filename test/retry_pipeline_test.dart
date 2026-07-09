@@ -207,10 +207,8 @@ void main() {
 
       var policyAttempts = 0;
       final policy = Retry<int>(
-        retry: RetryStrategy<int>(
-          delay: DelayPolicy.none(),
-          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
-        ),
+        delay: DelayPolicy.none(),
+        maxRetries: 1,
         fallback: FallbackStrategy.value(7),
       );
 
@@ -256,10 +254,8 @@ void main() {
         recoveryDuration: const Duration(minutes: 1),
       );
       final policy = Retry<int>(
-        retry: RetryStrategy<int>(
-          delay: DelayPolicy.none(),
-          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(2),
-        ),
+        delay: DelayPolicy.none(),
+        maxRetries: 2,
         circuitBreaker: breaker,
         fallback: FallbackStrategy.value(
           7,
@@ -286,11 +282,9 @@ void main() {
     test('fallback does not handle final retry result', () async {
       var attempts = 0;
       final policy = Retry<int>(
-        retry: RetryStrategy<int>(
-          delay: DelayPolicy.none(),
-          retryIf: RetryIf<int>.result((value) => value == 0) &
-              RetryIf<int>.maxRetries(1),
-        ),
+        delay: DelayPolicy.none(),
+        maxRetries: 1,
+        retryIf: RetryIf<int>.result((value) => value == 0),
         fallback: FallbackStrategy.value(9),
       );
 
@@ -307,10 +301,8 @@ void main() {
       var attempts = 0;
       final fallbackError = StateError('fallback failed');
       final policy = Retry<int>(
-        retry: RetryStrategy<int>(
-          delay: DelayPolicy.none(),
-          retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
-        ),
+        delay: DelayPolicy.none(),
+        maxRetries: 1,
         fallback: FallbackStrategy.callback((_) => throw fallbackError),
       );
 
