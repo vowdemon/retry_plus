@@ -1,150 +1,188 @@
+import 'dart:async';
+
 import 'outcome.dart';
 import 'predicate.dart';
+import 'retry_pipeline_context.dart';
 
-/// Predicate that decides whether an attempt outcome should be retried.
+/// Metadata available when deciding whether to schedule another retry.
+final class RetryAttemptContext<T> {
+  /// Creates retry attempt metadata.
+  const RetryAttemptContext({
+    required this.outcome,
+    required this.pipelineContext,
+    required this.retryIndex,
+    required this.attemptNumber,
+    required this.elapsed,
+    required this.attemptDuration,
+  });
+
+  /// Outcome produced by the attempt.
+  final AttemptOutcome<T> outcome;
+
+  /// Shared pipeline execution context.
+  final RetryPipelineContext<T> pipelineContext;
+
+  /// Zero-based retry index for the retry that may be scheduled next.
+  final int retryIndex;
+
+  /// One-based operation attempt number that produced [outcome].
+  final int attemptNumber;
+
+  /// Elapsed execution time when the decision is evaluated.
+  final Duration elapsed;
+
+  /// Duration of the attempt that produced [outcome].
+  final Duration attemptDuration;
+
+  /// Shared strategy outcome view for this retry attempt.
+  StrategyOutcome<T> get strategyOutcome {
+    final metadata = <String, Object?>{
+      'retryIndex': retryIndex,
+      'attemptNumber': attemptNumber,
+      'attemptDuration': attemptDuration,
+    };
+    return switch (outcome) {
+      AttemptOutcomeResult(:final result) => StrategyOutcome<T>.result(
+          result,
+          context: pipelineContext,
+          elapsed: elapsed,
+          metadata: metadata,
+        ),
+      AttemptOutcomeError(:final error, :final stackTrace) =>
+        StrategyOutcome<T>.error(
+          error,
+          stackTrace,
+          context: pipelineContext,
+          elapsed: elapsed,
+          metadata: metadata,
+        ),
+    };
+  }
+}
+
+/// Decision that determines whether another retry attempt should be scheduled.
 ///
-/// Callers can extend this class or use callback factories such as
-/// [RetryPredicate.where] to provide domain-specific retry decisions.
-abstract class RetryPredicate<T>
-    with PredicateOperators<RetryPredicate<T>>
-    implements BasePredicate<RetryPredicate<T>> {
-  /// Creates a retry predicate.
-  const RetryPredicate();
+/// Retry decisions receive full attempt metadata, so they can express both
+/// outcome matching and retry budget rules.
+abstract class RetryIf<T>
+    extends ContextPredicate<RetryAttemptContext<T>, RetryIf<T>> {
+  /// Creates a retry decision.
+  const RetryIf();
 
-  /// Returns true when [outcome] should be retried.
-  bool shouldRetry(AttemptOutcome<T> outcome);
+  /// Returns true when another retry attempt should be scheduled.
+  @override
+  FutureOr<bool> shouldHandle(RetryAttemptContext<T> attempt);
+
+  @override
+  RetryIf<T> build(
+      FutureOr<bool> Function(RetryAttemptContext<T> context) shouldHandle) {
+    return _WhereRetryIf<T>(shouldHandle);
+  }
 
   /// Retries any exception outcome.
-  factory RetryPredicate.exception() => _ExceptionRetryPredicate<T>();
+  factory RetryIf.exception() => _ExceptionRetryIf<T>();
 
   /// Retries exception outcomes matching [test].
-  factory RetryPredicate.exceptionWhere(
-    bool Function(Object error, StackTrace stackTrace) test,
+  factory RetryIf.exceptionWhere(
+    FutureOr<bool> Function(Object error, StackTrace stackTrace) test,
   ) {
-    return _ExceptionWhereRetryPredicate<T>(test);
+    return _ExceptionWhereRetryIf<T>(test);
   }
 
   /// Retries result outcomes matching [test].
-  factory RetryPredicate.result(bool Function(T result) test) {
-    return _ResultRetryPredicate<T>(test);
+  factory RetryIf.result(FutureOr<bool> Function(T result) test) {
+    return _ResultRetryIf<T>(test);
   }
 
-  /// Retries outcomes matching [test].
-  factory RetryPredicate.where(bool Function(AttemptOutcome<T> outcome) test) {
-    return _WhereRetryPredicate<T>(test);
+  /// Retries attempts matching [test].
+  factory RetryIf.where(
+      FutureOr<bool> Function(RetryAttemptContext<T> attempt) test) {
+    return _WhereRetryIf<T>(test);
   }
 
   /// Retries every outcome.
-  factory RetryPredicate.any() => _AnyRetryPredicate<T>();
+  factory RetryIf.any() => _AnyRetryIf<T>();
 
   /// Retries no outcomes.
-  factory RetryPredicate.never() => _NeverRetryPredicate<T>();
+  factory RetryIf.never() => _NeverRetryIf<T>();
+
+  /// Allows retries while [RetryAttemptContext.retryIndex] is lower than [retries].
+  factory RetryIf.maxRetries(int retries) {
+    if (retries < 0) {
+      throw ArgumentError.value(retries, 'retries', 'must not be negative');
+    }
+    return _MaxRetriesRetryIf<T>(retries);
+  }
 
   /// Retries exception outcomes of type [E].
-  static RetryPredicate<T> exceptionType<E extends Object, T>() {
-    return _ExceptionWhereRetryPredicate<T>((error, _) => error is E);
-  }
-
-  @override
-  RetryPredicate<T> addOr(RetryPredicate<T> left, RetryPredicate<T> right) =>
-      _OrRetryPredicate<T>(left, right);
-
-  @override
-  RetryPredicate<T> addAnd(RetryPredicate<T> left, RetryPredicate<T> right) =>
-      _AndRetryPredicate<T>(left, right);
-
-  @override
-  RetryPredicate<T> addNot(RetryPredicate<T> inner) {
-    return _NotRetryPredicate<T>(inner);
+  static RetryIf<T> exceptionType<E extends Object, T>() {
+    return _ExceptionWhereRetryIf<T>((error, _) => error is E);
   }
 }
 
-final class _ExceptionRetryPredicate<T> extends RetryPredicate<T> {
+final class _ExceptionRetryIf<T> extends RetryIf<T> {
   @override
-  bool shouldRetry(AttemptOutcome<T> outcome) =>
-      outcome is AttemptOutcomeError<T>;
+  FutureOr<bool> shouldHandle(RetryAttemptContext<T> attempt) =>
+      attempt.outcome is AttemptOutcomeError<T>;
 }
 
-final class _ExceptionWhereRetryPredicate<T> extends RetryPredicate<T> {
-  const _ExceptionWhereRetryPredicate(this.test);
+final class _ExceptionWhereRetryIf<T> extends RetryIf<T> {
+  const _ExceptionWhereRetryIf(this._callback);
 
-  final bool Function(Object error, StackTrace stackTrace) test;
+  final FutureOr<bool> Function(Object error, StackTrace stackTrace) _callback;
 
   @override
-  bool shouldRetry(AttemptOutcome<T> outcome) {
-    return switch (outcome) {
+  FutureOr<bool> shouldHandle(RetryAttemptContext<T> attempt) {
+    return switch (attempt.outcome) {
       AttemptOutcomeError(:final error, :final stackTrace) =>
-        test(error, stackTrace),
+        _callback(error, stackTrace),
       _ => false,
     };
   }
 }
 
-final class _ResultRetryPredicate<T> extends RetryPredicate<T> {
-  const _ResultRetryPredicate(this.test);
+final class _ResultRetryIf<T> extends RetryIf<T> {
+  const _ResultRetryIf(this._callback);
 
-  final bool Function(T result) test;
+  final FutureOr<bool> Function(T result) _callback;
 
   @override
-  bool shouldRetry(AttemptOutcome<T> outcome) {
-    return switch (outcome) {
-      AttemptOutcomeResult(:final result) => test(result),
+  FutureOr<bool> shouldHandle(RetryAttemptContext<T> attempt) {
+    return switch (attempt.outcome) {
+      AttemptOutcomeResult(:final result) => _callback(result),
       _ => false,
     };
   }
 }
 
-final class _WhereRetryPredicate<T> extends RetryPredicate<T> {
-  const _WhereRetryPredicate(this.test);
+final class _WhereRetryIf<T> extends RetryIf<T> {
+  const _WhereRetryIf(this._callback);
 
-  final bool Function(AttemptOutcome<T> outcome) test;
-
-  @override
-  bool shouldRetry(AttemptOutcome<T> outcome) => test(outcome);
-}
-
-final class _AnyRetryPredicate<T> extends RetryPredicate<T> {
-  @override
-  bool shouldRetry(AttemptOutcome<T> outcome) => true;
-}
-
-final class _NeverRetryPredicate<T> extends RetryPredicate<T> {
-  @override
-  bool shouldRetry(AttemptOutcome<T> outcome) => false;
-}
-
-final class _OrRetryPredicate<T> extends RetryPredicate<T> {
-  const _OrRetryPredicate(this.left, this.right);
-
-  final RetryPredicate<T> left;
-  final RetryPredicate<T> right;
+  final FutureOr<bool> Function(RetryAttemptContext<T> attempt) _callback;
 
   @override
-  bool shouldRetry(AttemptOutcome<T> outcome) {
-    return left.shouldRetry(outcome) || right.shouldRetry(outcome);
+  FutureOr<bool> shouldHandle(RetryAttemptContext<T> attempt) {
+    return _callback(attempt);
   }
 }
 
-final class _AndRetryPredicate<T> extends RetryPredicate<T> {
-  const _AndRetryPredicate(this.left, this.right);
-
-  final RetryPredicate<T> left;
-  final RetryPredicate<T> right;
-
+final class _AnyRetryIf<T> extends RetryIf<T> {
   @override
-  bool shouldRetry(AttemptOutcome<T> outcome) {
-    return left.shouldRetry(outcome) && right.shouldRetry(outcome);
-  }
+  FutureOr<bool> shouldHandle(RetryAttemptContext<T> attempt) => true;
 }
 
-final class _NotRetryPredicate<T> extends RetryPredicate<T> {
-  const _NotRetryPredicate(this.inner);
+final class _NeverRetryIf<T> extends RetryIf<T> {
+  @override
+  FutureOr<bool> shouldHandle(RetryAttemptContext<T> attempt) => false;
+}
 
-  final RetryPredicate<T> inner;
+final class _MaxRetriesRetryIf<T> extends RetryIf<T> {
+  const _MaxRetriesRetryIf(this.retries);
+
+  final int retries;
 
   @override
-  bool shouldRetry(AttemptOutcome<T> outcome) => !inner.shouldRetry(outcome);
-
-  @override
-  RetryPredicate<T> addNot(RetryPredicate<T> inner) => this.inner;
+  FutureOr<bool> shouldHandle(RetryAttemptContext<T> attempt) {
+    return attempt.retryIndex < retries;
+  }
 }

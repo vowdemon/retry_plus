@@ -3,17 +3,24 @@ import 'dart:async';
 import 'package:clock/clock.dart';
 
 import 'cancellation.dart';
-import 'events.dart';
-import 'retry_context.dart';
+import 'outcome.dart';
+import 'retry_pipeline_context.dart';
 import 'retry_future.dart';
+import 'telemetry.dart';
 
-/// Strategy interface for wrapping pipeline execution.
+/// Strategy base class for wrapping pipeline execution.
 ///
-/// Callers can implement this interface to add custom ordered behavior to a
+/// Callers can extend this class to add custom ordered behavior to a
 /// [RetryPipeline].
-abstract interface class RetryPipelineStrategy<T> {
+abstract class RetryPipelineStrategy<T> {
+  /// Creates a pipeline strategy.
+  const RetryPipelineStrategy({this.name});
+
+  /// Optional strategy instance name used in telemetry source.
+  final String? name;
+
   /// Executes this strategy around [next].
-  Future<T> execute(RetryContext<T> context, Future<T> Function() next);
+  Future<T> execute(RetryPipelineContext<T> context, Future<T> Function() next);
 }
 
 /// Lower-level engine that applies ordered strategies to an operation.
@@ -21,24 +28,38 @@ final class RetryPipeline<T> {
   /// Creates a retry pipeline.
   RetryPipeline({
     List<RetryPipelineStrategy<T>> strategies = const [],
-    this.onEvent,
+    this.telemetry = const TelemetryOptions(),
+    this.pipelineKey,
   }) : strategies = List<RetryPipelineStrategy<T>>.unmodifiable(strategies);
 
   /// Ordered strategies wrapping the operation.
   final List<RetryPipelineStrategy<T>> strategies;
 
-  /// Optional pipeline event observer.
-  final void Function(PipelineEvent event)? onEvent;
+  /// Telemetry options.
+  final TelemetryOptions telemetry;
+
+  /// Optional stable pipeline key used in telemetry source.
+  final String? pipelineKey;
 
   /// Executes [operation] through the pipeline.
   RetryFuture<T> execute(
     FutureOr<T> Function() operation, {
     CancellationToken? cancellationToken,
+    String? operationKey,
   }) {
-    final context = RetryContext<T>.execution(
-      startedAt: clock.now(),
+    final startedAt = clock.now();
+    final context = RetryPipelineContext<T>.execution(
+      startedAt: startedAt,
       cancellationToken: cancellationToken ?? CancellationToken(),
-      onEvent: onEvent,
+      telemetry: TelemetrySink(
+        options: telemetry,
+        source: TelemetrySource(
+          pipelineKey: pipelineKey,
+          operationKey: operationKey,
+        ),
+        startedAt: startedAt,
+        now: clock.now,
+      ),
     );
     final completer = Completer<T>();
 
@@ -51,10 +72,10 @@ final class RetryPipeline<T> {
 
   Future<void> _run(
     FutureOr<T> Function() operation,
-    RetryContext<T> context,
+    RetryPipelineContext<T> context,
     Completer<T> completer,
   ) async {
-    context.emit(const PipelineEvent(type: PipelineEventType.started));
+    await context.telemetry?.emit<T>(type: TelemetryEventType.pipelineStarted);
 
     Future<T> invokeOperation() async {
       context.setPhase(RetryPhase.attempting);
@@ -70,18 +91,23 @@ final class RetryPipeline<T> {
 
     try {
       final result = await next();
-      context.emit(const PipelineEvent(type: PipelineEventType.completed));
+      await context.telemetry?.emit<T>(
+        type: TelemetryEventType.pipelineSucceeded,
+        outcome: StrategyOutcome<T>.result(result, context: context),
+        duration: context.elapsed,
+      );
       context.setPhase(RetryPhase.completed);
       completer.complete(result);
     } catch (error, stackTrace) {
       final cancelled = isCancellationError(error, context.cancelToken);
-      context.emit(
-        PipelineEvent(
-          type: cancelled
-              ? PipelineEventType.cancelled
-              : PipelineEventType.failed,
-          error: error,
-        ),
+      await context.telemetry?.emit<T>(
+        type: cancelled
+            ? TelemetryEventType.pipelineCancelled
+            : TelemetryEventType.pipelineFailed,
+        outcome: StrategyOutcome<T>.error(error, stackTrace, context: context),
+        error: error,
+        stackTrace: stackTrace,
+        duration: context.elapsed,
       );
       context.setPhase(cancelled ? RetryPhase.cancelled : RetryPhase.failed);
       completer.completeError(error, stackTrace);
@@ -92,7 +118,7 @@ final class RetryPipeline<T> {
 final class _PipelineRetryFuture<T> implements RetryFuture<T> {
   _PipelineRetryFuture(this._context, this._future);
 
-  final RetryContext<T> _context;
+  final RetryPipelineContext<T> _context;
   final Future<T> _future;
 
   @override

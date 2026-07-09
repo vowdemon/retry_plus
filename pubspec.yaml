@@ -3,7 +3,7 @@ description: Composable retry policies for Dart with exception and result predic
 version: 0.1.0
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
   clock: ^1.1.2

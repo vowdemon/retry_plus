@@ -1,6 +1,6 @@
 ## Context
 
-`retry_plus` is a Dart package scaffold with placeholder API, README, example, and tests. The change turns it into a publishable retry library inspired by Tenacity's composable retry strategies, p-retry's lightweight async ergonomics, and Polly's policy-oriented resilience model without adopting a full resilience pipeline in the first release.
+`retry_plus` is a Dart package scaffold with placeholder API, README, example, and tests. The change turns it into a publishable retry library inspired by Tenacity's composable retry strategies, p-retry's lightweight async ergonomics, and policy-oriented resilience models without adopting a full resilience pipeline in the first release.
 
 The primary consumers are Dart and Flutter developers retrying transient async work such as HTTP calls, SDK requests, database calls, and other IO. The implementation should remain dependency-light, deterministic in tests, and understandable as a small library.
 

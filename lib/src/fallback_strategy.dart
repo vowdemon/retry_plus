@@ -1,31 +1,38 @@
+import 'dart:async';
+
 import 'cancellation.dart';
-import 'events.dart';
-import 'exceptions.dart';
+import 'outcome.dart';
 import 'pipeline.dart';
 import 'predicate.dart';
-import 'retry_context.dart';
+import 'retry_pipeline_context.dart';
+import 'telemetry.dart';
 
 /// Context passed to fallback callbacks.
-final class FallbackContext<T> {
+final class FallbackContext<T> implements OutcomeContext<T> {
   /// Creates fallback context.
   const FallbackContext({
-    required this.failure,
-    required this.stackTrace,
+    required this.outcome,
     required this.elapsed,
-    required this.retryContext,
+    required this.pipelineContext,
   });
 
+  /// Final outcome being handled.
+  @override
+  final StrategyOutcome<T> outcome;
+
   /// Final failure being handled.
-  final Object failure;
+  Object get failure => OutcomeContextAccess<T>(this).failure;
 
   /// Stack trace captured with [failure].
-  final StackTrace stackTrace;
+  StackTrace get stackTrace => OutcomeContextAccess<T>(this).stackTrace;
 
   /// Elapsed pipeline time.
+  @override
   final Duration elapsed;
 
-  /// Retry context.
-  final RetryContext<T> retryContext;
+  /// Pipeline context.
+  @override
+  final RetryPipelineContext<T> pipelineContext;
 }
 
 /// Predicate that decides whether fallback handles a final failure.
@@ -33,55 +40,70 @@ final class FallbackContext<T> {
 /// Callers can extend this class or use [FallbackPredicate.where] to provide
 /// domain-specific fallback decisions.
 abstract class FallbackPredicate<T>
-    with PredicateOperators<FallbackPredicate<T>>
-    implements BasePredicate<FallbackPredicate<T>> {
+    extends ContextPredicate<FallbackContext<T>, FallbackPredicate<T>> {
   /// Creates a fallback predicate.
   const FallbackPredicate();
 
   /// Returns true when fallback should handle [context].
-  bool shouldFallback(FallbackContext<T> context);
+  @override
+  FutureOr<bool> shouldHandle(FallbackContext<T> context);
 
-  /// Handles every final failure.
+  @override
+  FallbackPredicate<T> build(
+    FutureOr<bool> Function(FallbackContext<T> context) shouldHandle,
+  ) {
+    return _FallbackWherePredicate<T>(shouldHandle);
+  }
+
+  /// Handles every non-cancellation final outcome.
   ///
   /// [FallbackStrategy] bypasses cancellation before evaluating predicates.
-  factory FallbackPredicate.any() => _AnyFallbackPredicate<T>();
+  factory FallbackPredicate.any() {
+    return _FallbackWherePredicate<T>((context) => !context.isCancellation);
+  }
+
+  /// Handles non-cancellation final exceptions.
+  factory FallbackPredicate.exception() {
+    return _FallbackWherePredicate<T>(
+      (context) =>
+          context.outcome is StrategyOutcomeError<T> && !context.isCancellation,
+    );
+  }
+
+  /// Handles non-cancellation final exceptions matching [test].
+  factory FallbackPredicate.exceptionWhere(
+    FutureOr<bool> Function(Object error, StackTrace stackTrace) test,
+  ) {
+    return _FallbackWherePredicate<T>(
+      (context) => switch (context.outcome) {
+        StrategyOutcomeError(:final error, :final stackTrace)
+            when !context.isCancellation =>
+          test(error, stackTrace),
+        _ => false,
+      },
+    );
+  }
 
   /// Handles final failures matching [test].
-  factory FallbackPredicate.where(bool Function(FallbackContext<T>) test) {
+  factory FallbackPredicate.where(
+    FutureOr<bool> Function(FallbackContext<T>) test,
+  ) {
     return _FallbackWherePredicate<T>(test);
   }
 
-  /// Handles retry-exhausted results.
-  factory FallbackPredicate.retryExhausted() {
+  /// Handles result outcomes matching [test].
+  factory FallbackPredicate.result(FutureOr<bool> Function(T result) test) {
     return _FallbackWherePredicate<T>(
-      (context) => context.failure is RetryExhaustedException<T>,
+      (context) => switch (context.outcome) {
+        StrategyOutcomeResult(:final result) => test(result),
+        _ => false,
+      },
     );
   }
 
   /// Handles final exceptions of type [E].
   static FallbackPredicate<T> exceptionType<E extends Object, T>() {
-    return _FallbackWherePredicate<T>((context) => context.failure is E);
-  }
-
-  @override
-  FallbackPredicate<T> addOr(
-    FallbackPredicate<T> left,
-    FallbackPredicate<T> right,
-  ) {
-    return _OrFallbackPredicate<T>(left, right);
-  }
-
-  @override
-  FallbackPredicate<T> addAnd(
-    FallbackPredicate<T> left,
-    FallbackPredicate<T> right,
-  ) {
-    return _AndFallbackPredicate<T>(left, right);
-  }
-
-  @override
-  FallbackPredicate<T> addNot(FallbackPredicate<T> inner) {
-    return _NotFallbackPredicate<T>(inner);
+    return FallbackPredicate<T>.exceptionWhere((error, _) => error is E);
   }
 }
 
@@ -89,41 +111,69 @@ abstract class FallbackPredicate<T>
 ///
 /// Cancellation always bypasses fallback handling, even when [fallbackIf] is
 /// [FallbackPredicate.any].
-final class FallbackStrategy<T> implements RetryPipelineStrategy<T> {
-  const FallbackStrategy._({required this.fallback, required this.fallbackIf});
+final class FallbackStrategy<T> extends RetryPipelineStrategy<T> {
+  const FallbackStrategy._({
+    required this.fallback,
+    required this.fallbackIf,
+    super.name,
+    this.onFallback,
+  });
 
   /// Creates fallback with a static [value].
-  factory FallbackStrategy.value(T value, {FallbackPredicate<T>? fallbackIf}) {
+  factory FallbackStrategy.value(
+    T value, {
+    String? name,
+    FallbackPredicate<T>? fallbackIf,
+    FutureOr<void> Function(FallbackContext<T> context)? onFallback,
+  }) {
     return FallbackStrategy<T>._(
       fallback: (_) => value,
-      fallbackIf: fallbackIf ?? FallbackPredicate<T>.any(),
+      fallbackIf: fallbackIf ?? FallbackPredicate<T>.exception(),
+      name: name,
+      onFallback: onFallback,
     );
   }
 
   /// Creates fallback with a [callback].
   factory FallbackStrategy.callback(
-    T Function(FallbackContext<T> context) callback, {
+    FutureOr<T> Function(FallbackContext<T> context) callback, {
+    String? name,
     FallbackPredicate<T>? fallbackIf,
+    FutureOr<void> Function(FallbackContext<T> context)? onFallback,
   }) {
     return FallbackStrategy<T>._(
       fallback: callback,
-      fallbackIf: fallbackIf ?? FallbackPredicate<T>.any(),
+      fallbackIf: fallbackIf ?? FallbackPredicate<T>.exception(),
+      name: name,
+      onFallback: onFallback,
     );
   }
 
   /// Computes fallback result.
-  final T Function(FallbackContext<T> context) fallback;
+  final FutureOr<T> Function(FallbackContext<T> context) fallback;
 
   /// Decides whether fallback applies.
   final FallbackPredicate<T> fallbackIf;
 
+  /// Called before fallback produces a result.
+  final FutureOr<void> Function(FallbackContext<T> context)? onFallback;
+
   @override
   Future<T> execute(
-    RetryContext<T> context,
+    RetryPipelineContext<T> context,
     Future<T> Function() next,
   ) async {
     try {
-      return await next();
+      final result = await next();
+      final fallbackContext = FallbackContext<T>(
+        outcome: StrategyOutcome<T>.result(result, context: context),
+        elapsed: context.elapsed,
+        pipelineContext: context,
+      );
+      if (!await fallbackIf.shouldHandle(fallbackContext)) {
+        return result;
+      }
+      return _handleFallback(fallbackContext);
     } on RetryCancelledException {
       rethrow;
     } catch (error, stackTrace) {
@@ -131,75 +181,72 @@ final class FallbackStrategy<T> implements RetryPipelineStrategy<T> {
         Error.throwWithStackTrace(error, stackTrace);
       }
       final fallbackContext = FallbackContext<T>(
-        failure: error,
-        stackTrace: stackTrace,
+        outcome: StrategyOutcome<T>.error(
+          error,
+          stackTrace,
+          context: context,
+        ),
         elapsed: context.elapsed,
-        retryContext: context,
+        pipelineContext: context,
       );
-      if (!fallbackIf.shouldFallback(fallbackContext)) {
+      if (!await fallbackIf.shouldHandle(fallbackContext)) {
         rethrow;
       }
-      final result = fallback(fallbackContext);
-      context.emit(
-        PipelineEvent(
-          type: PipelineEventType.fallback,
-          error: error,
-          metadata: <String, Object?>{'elapsed': context.elapsed},
-        ),
+      return _handleFallback(fallbackContext);
+    }
+  }
+
+  Future<T> _handleFallback(FallbackContext<T> context) async {
+    await context.pipelineContext.telemetry?.emit<T>(
+      type: TelemetryEventType.fallbackHandling,
+      outcome: context.outcome,
+      strategyName: name,
+      error: _outcomeError(context.outcome),
+      stackTrace: _outcomeStackTrace(context.outcome),
+    );
+    await onFallback?.call(context);
+    try {
+      final result = await fallback(context);
+      await context.pipelineContext.telemetry?.emit<T>(
+        type: TelemetryEventType.fallbackApplied,
+        outcome: context.outcome,
+        strategyName: name,
+        error: _outcomeError(context.outcome),
+        stackTrace: _outcomeStackTrace(context.outcome),
       );
       return result;
+    } catch (error, stackTrace) {
+      await context.pipelineContext.telemetry?.emit<T>(
+        type: TelemetryEventType.fallbackFailed,
+        outcome: context.outcome,
+        strategyName: name,
+        error: error,
+        stackTrace: stackTrace,
+      );
+      Error.throwWithStackTrace(error, stackTrace);
     }
   }
 }
 
-final class _AnyFallbackPredicate<T> extends FallbackPredicate<T> {
-  @override
-  bool shouldFallback(FallbackContext<T> context) => true;
+Object? _outcomeError<T>(StrategyOutcome<T> outcome) {
+  return switch (outcome) {
+    StrategyOutcomeError(:final error) => error,
+    _ => null,
+  };
+}
+
+StackTrace? _outcomeStackTrace<T>(StrategyOutcome<T> outcome) {
+  return switch (outcome) {
+    StrategyOutcomeError(:final stackTrace) => stackTrace,
+    _ => null,
+  };
 }
 
 final class _FallbackWherePredicate<T> extends FallbackPredicate<T> {
-  const _FallbackWherePredicate(this.test);
+  const _FallbackWherePredicate(this._callback);
 
-  final bool Function(FallbackContext<T>) test;
-
-  @override
-  bool shouldFallback(FallbackContext<T> context) => test(context);
-}
-
-final class _OrFallbackPredicate<T> extends FallbackPredicate<T> {
-  const _OrFallbackPredicate(this.left, this.right);
-
-  final FallbackPredicate<T> left;
-  final FallbackPredicate<T> right;
+  final FutureOr<bool> Function(FallbackContext<T>) _callback;
 
   @override
-  bool shouldFallback(FallbackContext<T> context) {
-    return left.shouldFallback(context) || right.shouldFallback(context);
-  }
-}
-
-final class _AndFallbackPredicate<T> extends FallbackPredicate<T> {
-  const _AndFallbackPredicate(this.left, this.right);
-
-  final FallbackPredicate<T> left;
-  final FallbackPredicate<T> right;
-
-  @override
-  bool shouldFallback(FallbackContext<T> context) {
-    return left.shouldFallback(context) && right.shouldFallback(context);
-  }
-}
-
-final class _NotFallbackPredicate<T> extends FallbackPredicate<T> {
-  const _NotFallbackPredicate(this.inner);
-
-  final FallbackPredicate<T> inner;
-
-  @override
-  bool shouldFallback(FallbackContext<T> context) {
-    return !inner.shouldFallback(context);
-  }
-
-  @override
-  FallbackPredicate<T> addNot(FallbackPredicate<T> inner) => this.inner;
+  FutureOr<bool> shouldHandle(FallbackContext<T> context) => _callback(context);
 }

@@ -2,57 +2,55 @@ import 'dart:async';
 
 import 'cancellation.dart';
 import 'delay.dart';
-import 'events.dart';
-import 'exceptions.dart';
 import 'outcome.dart';
 import 'pipeline.dart';
-import 'retry_context.dart';
+import 'retry_pipeline_context.dart';
 import 'retry_future.dart';
 import 'retry_predicate.dart';
-import 'stop.dart';
+import 'telemetry.dart';
 
 /// Retry configuration and pipeline strategy.
-final class RetryStrategy<T> implements RetryPipelineStrategy<T> {
+final class RetryStrategy<T> extends RetryPipelineStrategy<T> {
   /// Creates a retry strategy.
   RetryStrategy({
-    StopStrategy? stop,
-    DelayStrategy? delay,
-    RetryPredicate<T>? retryIf,
+    super.name,
+    DelayPolicy? delay,
+    RetryIf<T>? retryIf,
     this.onRetry,
     this.onGiveUp,
-  })  : stop = stop ?? StopStrategy.afterAttempt(3),
-        delay = delay ??
-            DelayStrategy.exponential(
+  })  : delay = delay ??
+            DelayPolicy.exponential(
               initial: const Duration(milliseconds: 200),
               max: const Duration(seconds: 5),
             ),
-        retryIf = retryIf ?? RetryPredicate<T>.exception();
-
-  /// Strategy that decides when retrying must stop.
-  final StopStrategy stop;
+        retryIf =
+            retryIf ?? (RetryIf<T>.exception() & RetryIf<T>.maxRetries(3));
 
   /// Strategy that computes the wait before the next attempt.
-  final DelayStrategy delay;
+  final DelayPolicy delay;
 
   /// Predicate that decides whether an outcome should be retried.
-  final RetryPredicate<T> retryIf;
+  final RetryIf<T> retryIf;
 
-  /// Called when the policy schedules another attempt.
-  final void Function(RetryEvent<T> event)? onRetry;
+  /// Called after retry continuation is accepted and before delay calculation.
+  final FutureOr<void> Function(RetryAttemptContext<T> attempt)? onRetry;
 
   /// Called when the policy gives up on a retryable outcome.
-  final void Function(RetryEvent<T> event)? onGiveUp;
+  final FutureOr<void> Function(RetryAttemptContext<T> attempt)? onGiveUp;
 
   @override
   Future<T> execute(
-    RetryContext<T> context,
+    RetryPipelineContext<T> context,
     Future<T> Function() next,
   ) async {
+    var hasRetried = false;
+    var attemptNumber = 0;
     while (true) {
       context.throwIfCancelled();
-      context.advanceAttempt();
+      attemptNumber++;
 
       late final AttemptOutcome<T> outcome;
+      final attemptStartedAt = context.now();
       try {
         outcome = AttemptOutcome.result(await next());
       } on RetryCancelledException {
@@ -63,68 +61,114 @@ final class RetryStrategy<T> implements RetryPipelineStrategy<T> {
         }
         outcome = AttemptOutcome.error(error, stackTrace);
       }
-      context.outcome = outcome;
-      context.nextDelay = Duration.zero;
+      final attemptDuration = context.now().difference(attemptStartedAt);
 
-      if (!retryIf.shouldRetry(outcome)) {
-        return switch (outcome) {
-          AttemptOutcomeResult(:final result) => result,
-          AttemptOutcomeError(:final error, :final stackTrace) =>
-            Error.throwWithStackTrace(error, stackTrace),
-        };
-      }
-
-      final computedDelay = delay.computeDelay(
-        context,
-        context.random,
+      final attempt = RetryAttemptContext<T>(
+        outcome: outcome,
+        pipelineContext: context,
+        retryIndex: attemptNumber - 1,
+        attemptNumber: attemptNumber,
+        elapsed: context.elapsed,
+        attemptDuration: attemptDuration,
       );
-      context.nextDelay = computedDelay;
+      final shouldRetry = await retryIf.shouldHandle(attempt);
 
-      if (stop.shouldStop(context) ||
-          stop.shouldStopBeforeDelay(context, computedDelay)) {
-        final event = RetryEvent<T>.giveUp(context);
-        onGiveUp?.call(event);
-        context.emit(PipelineEvent(type: PipelineEventType.giveUp));
-        _throwFinal(
-          outcome,
-          context.attemptNumber,
-          context.elapsed,
-          context,
+      if (!shouldRetry) {
+        await _emitAttemptTelemetry(
+          context: context,
+          attempt: attempt,
+          handled: false,
+        );
+        return await _completeFinalOutcome(
+          context: context,
+          outcome: outcome,
+          attempt: attempt,
+          shouldGiveUp: hasRetried,
         );
       }
 
-      final event = RetryEvent<T>.retry(context);
-      onRetry?.call(event);
-      context.emit(
-        PipelineEvent(
-          type: PipelineEventType.retry,
-          metadata: <String, Object?>{
-            'attemptNumber': context.attemptNumber,
-            'nextDelay': computedDelay,
-          },
-        ),
+      await _emitAttemptTelemetry(
+        context: context,
+        attempt: attempt,
+        handled: true,
+      );
+      await onRetry?.call(attempt);
+
+      final computedDelay =
+          await delay.compute(attempt, context.random) ?? Duration.zero;
+      hasRetried = true;
+      await context.telemetry?.emit<T>(
+        type: TelemetryEventType.retryScheduled,
+        outcome: attempt.strategyOutcome,
+        strategyName: name,
+        attributes: <String, Object?>{
+          'attemptNumber': attempt.attemptNumber,
+          'retryIndex': attempt.retryIndex,
+          'nextDelay': computedDelay,
+        },
       );
       context.setPhase(RetryPhase.waiting);
       await context.sleep(computedDelay);
     }
   }
 
-  Never _throwFinal(
-    AttemptOutcome<T> outcome,
-    int attempts,
-    Duration elapsed,
-    RetryContext<T> context,
-  ) {
+  Future<T> _completeFinalOutcome({
+    required RetryPipelineContext<T> context,
+    required AttemptOutcome<T> outcome,
+    required RetryAttemptContext<T> attempt,
+    required bool shouldGiveUp,
+  }) async {
+    if (shouldGiveUp) {
+      await context.telemetry?.emit<T>(
+        type: TelemetryEventType.retryGiveUp,
+        outcome: attempt.strategyOutcome,
+        strategyName: name,
+        error: switch (outcome) {
+          AttemptOutcomeError(:final error) => error,
+          _ => null,
+        },
+        stackTrace: switch (outcome) {
+          AttemptOutcomeError(:final stackTrace) => stackTrace,
+          _ => null,
+        },
+        attributes: <String, Object?>{
+          'attemptNumber': attempt.attemptNumber,
+          'retryIndex': attempt.retryIndex,
+        },
+      );
+      await onGiveUp?.call(attempt);
+    }
     switch (outcome) {
       case AttemptOutcomeResult(:final result):
-        throw RetryExhaustedException<T>(
-          lastResult: result,
-          attempts: attempts,
-          elapsed: elapsed,
-          context: context,
-        );
+        return result;
       case AttemptOutcomeError(:final error, :final stackTrace):
         Error.throwWithStackTrace(error, stackTrace);
     }
+  }
+
+  Future<void> _emitAttemptTelemetry({
+    required RetryPipelineContext<T> context,
+    required RetryAttemptContext<T> attempt,
+    required bool handled,
+  }) async {
+    await context.telemetry?.emit<T>(
+      type: TelemetryEventType.retryAttempt,
+      duration: attempt.attemptDuration,
+      outcome: attempt.strategyOutcome,
+      strategyName: name,
+      error: switch (attempt.outcome) {
+        AttemptOutcomeError(:final error) => error,
+        _ => null,
+      },
+      stackTrace: switch (attempt.outcome) {
+        AttemptOutcomeError(:final stackTrace) => stackTrace,
+        _ => null,
+      },
+      attributes: <String, Object?>{
+        'attemptNumber': attempt.attemptNumber,
+        'retryIndex': attempt.retryIndex,
+        'handled': handled,
+      },
+    );
   }
 }

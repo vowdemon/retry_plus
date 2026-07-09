@@ -5,39 +5,28 @@ import 'package:clock/clock.dart';
 
 import 'cancellation.dart';
 import 'exceptions.dart';
-import 'outcome.dart';
-import 'pipeline_event.dart';
 import 'retry_future.dart';
-import 'timeout_strategy.dart';
+import 'telemetry.dart';
 
-/// Context for retry decisions and pipeline execution.
-final class RetryContext<T> {
-  /// Creates retry attempt metadata.
-  RetryContext({
-    this.attemptNumber = 0,
+/// Context for one retry pipeline execution.
+final class RetryPipelineContext<T> {
+  /// Creates a detached pipeline context for tests and custom utilities.
+  RetryPipelineContext({
     Duration elapsed = Duration.zero,
-    AttemptOutcome<T>? outcome,
-    this.nextDelay = Duration.zero,
   })  : _elapsed = elapsed,
-        _outcome = outcome,
         _startedAt = null,
         _cancellationToken = null,
-        _onEvent = null;
+        _telemetry = null;
 
   /// Creates a context for one pipeline execution.
-  RetryContext.execution({
+  RetryPipelineContext.execution({
     required DateTime startedAt,
     required CancellationToken cancellationToken,
-    void Function(PipelineEvent event)? onEvent,
-  })  : attemptNumber = 0,
-        _elapsed = Duration.zero,
-        nextDelay = Duration.zero,
+    required TelemetrySink telemetry,
+  })  : _elapsed = Duration.zero,
         _startedAt = startedAt,
         _cancellationToken = cancellationToken,
-        _onEvent = onEvent;
-
-  /// One-based attempt number.
-  int attemptNumber;
+        _telemetry = telemetry;
 
   /// Elapsed time since the policy started execution.
   Duration get elapsed {
@@ -52,51 +41,34 @@ final class RetryContext<T> {
     _elapsed = value;
   }
 
-  /// Outcome of the latest attempt.
-  AttemptOutcome<T> get outcome {
-    final outcome = _outcome;
-    if (outcome == null) {
-      throw StateError('No attempt outcome is available yet.');
-    }
-    return outcome;
-  }
-
-  set outcome(AttemptOutcome<T> value) {
-    _outcome = value;
-  }
-
-  /// Delay planned before the next attempt.
-  Duration nextDelay;
-
   /// Current retry execution phase.
   RetryPhase get phase => _phase;
 
   /// Effective cancellation token for this execution.
   CancellationToken get cancelToken => _requireCancellationToken();
 
+  /// Telemetry sink for this execution, if this context is attached to one.
+  TelemetrySink? get telemetry => _telemetry;
+
   /// Whether this execution has been cancelled.
-  bool get isCancelled => _cancellationToken?.isCancelled ?? false;
+  bool get isCancelled =>
+      _internalCancellationReason != null ||
+      (_cancellationToken?.isCancelled ?? false);
 
   Duration _elapsed;
-  AttemptOutcome<T>? _outcome;
   final DateTime? _startedAt;
   final CancellationToken? _cancellationToken;
-  final void Function(PipelineEvent event)? _onEvent;
+  final TelemetrySink? _telemetry;
+  Object? _internalCancellationReason;
   var _phase = RetryPhase.pending;
   static final _random = math.Random();
 
-  /// Advances the execution attempt count.
-  void advanceAttempt() {
-    attemptNumber++;
-  }
-
-  /// Emits a pipeline event.
-  void emit(PipelineEvent event) {
-    _onEvent?.call(event);
-  }
-
   /// Throws when the execution has been cancelled.
   void throwIfCancelled() {
+    final internalReason = _internalCancellationReason;
+    if (internalReason != null) {
+      _throwCancellationReason(internalReason);
+    }
     _requireCancellationToken().throwIfCancelled();
   }
 
@@ -128,21 +100,36 @@ final class RetryContext<T> {
   /// Applies timeout behavior.
   Future<R> timeout<R>(
     Future<R> future,
-    Duration duration,
-    TimeoutScope scope,
-  ) {
-    _requireCancellationToken().throwIfCancelled();
+    Duration duration, {
+    String? strategy,
+    Object? source,
+  }) {
+    throwIfCancelled();
     return future.timeout(
       duration,
-      onTimeout: () => throw RetryTimeoutException(scope),
+      onTimeout: () {
+        throw RetryTimeoutException(
+          strategy: strategy,
+          timeout: duration,
+          source: source,
+        );
+      },
     );
   }
 
   CancellationToken _requireCancellationToken() {
     final cancellationToken = _cancellationToken;
     if (cancellationToken == null) {
-      throw StateError('This retry context is not attached to an execution.');
+      throw StateError(
+          'This pipeline context is not attached to an execution.');
     }
     return cancellationToken;
+  }
+
+  Never _throwCancellationReason(Object reason) {
+    if (reason is Exception || reason is Error) {
+      throw reason;
+    }
+    throw RetryCancelledException(reason.toString());
   }
 }

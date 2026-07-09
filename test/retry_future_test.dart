@@ -2,12 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:retry_plus/retry_plus.dart';
-import 'package:test/test.dart';
+import 'package:test/test.dart' hide Retry;
 
 void main() {
   group('RetryFuture', () {
     test('is awaitable and exposes generated cancellation token', () async {
-      final future = RetryPolicy<int>().execute(() async => 42);
+      final future = Retry<int>().execute(() async => 42);
 
       expect(future, isA<RetryFuture<int>>());
       expect(future.cancelToken.isCancelled, isFalse);
@@ -18,7 +18,7 @@ void main() {
     test('exposes provided cancellation token', () async {
       final token = CancellationToken();
 
-      final future = RetryPolicy<int>().execute(
+      final future = Retry<int>().execute(
         () async => 42,
         cancellationToken: token,
       );
@@ -30,7 +30,7 @@ void main() {
     });
 
     test('delegates Future methods to the execution future', () async {
-      final success = RetryPolicy<int>().execute(() async => 7);
+      final success = Retry<int>().execute(() async => 7);
       var whenCompleteCalled = false;
 
       expect(await success.then((value) => value + 1), 8);
@@ -42,8 +42,8 @@ void main() {
       expect(await success.timeout(const Duration(seconds: 1)), 7);
 
       final error = StateError('down');
-      final failure = RetryPolicy<int>(
-        retryIf: RetryPredicate<int>.never(),
+      final failure = Retry<int>(
+        retryIf: RetryIf<int>.never(),
       ).execute(() async => throw error);
 
       expect(
@@ -54,10 +54,9 @@ void main() {
 
     test('executes synchronous operations through execute', () async {
       var attempts = 0;
-      final result = await RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
-        delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<int>.exception(),
+      final result = await Retry<int>(
+        delay: DelayPolicy.none(),
+        retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
       ).execute(() {
         attempts++;
         if (attempts == 1) {
@@ -70,10 +69,13 @@ void main() {
       expect(attempts, 2);
     });
 
-    test('top-level retry executes synchronous operations', () async {
+    test('call executes synchronous operations', () async {
       var attempts = 0;
 
-      final result = await retry<int>(
+      final result = await Retry<int>(
+        delay: DelayPolicy.none(),
+        retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
+      )(
         () {
           attempts++;
           if (attempts == 1) {
@@ -81,8 +83,6 @@ void main() {
           }
           return 9;
         },
-        attempts: 2,
-        delay: DelayStrategy.none(),
       );
 
       expect(result, 9);
@@ -92,10 +92,9 @@ void main() {
     test('cancel cancels the execution token and completes with cancellation',
         () async {
       late RetryFuture<int> future;
-      future = RetryPolicy<int>(
-        stop: StopStrategy.afterAttempt(2),
-        delay: DelayStrategy.none(),
-        retryIf: RetryPredicate<int>.exception(),
+      future = Retry<int>(
+        delay: DelayPolicy.none(),
+        retryIf: RetryIf<int>.exception() & RetryIf<int>.maxRetries(1),
         onRetry: (_) {
           future.cancel('stopped');
         },
@@ -114,7 +113,7 @@ void main() {
       final operationStarted = Completer<void>();
       final finishOperation = Completer<int>();
 
-      future = RetryPolicy<int>().execute(() {
+      future = Retry<int>().execute(() {
         expect(future.phase, RetryPhase.attempting);
         operationStarted.complete();
         return finishOperation.future;
@@ -131,8 +130,8 @@ void main() {
 
     test('exposes failed phase after non-cancellation failure', () async {
       final error = StateError('down');
-      final future = RetryPolicy<int>(
-        retryIf: RetryPredicate<int>.never(),
+      final future = Retry<int>(
+        retryIf: RetryIf<int>.never(),
       ).execute(() async => throw error);
 
       await expectLater(future, throwsA(same(error)));

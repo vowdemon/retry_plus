@@ -3,20 +3,19 @@ import 'package:retry_plus/retry_plus.dart';
 Future<void> main() async {
   var attempts = 0;
 
-  final policy = RetryPolicy<String>(
+  final policy = Retry<String>(
     retry: RetryStrategy(
-      stop: StopStrategy.afterAttempt(3),
-      delay: DelayStrategy.exponential(
+      delay: DelayPolicy.exponential(
         initial: const Duration(milliseconds: 100),
         max: const Duration(seconds: 1),
         jitter: Jitter.full(),
       ),
-      retryIf: RetryPredicate<String>.exception(),
+      retryIf: RetryIf<String>.exception() & RetryIf<String>.maxRetries(2),
       onRetry: (event) {
         print('attempt ${event.attemptNumber} failed; retrying');
       },
     ),
-    timeout: TimeoutStrategy.perAttempt(const Duration(seconds: 2)),
+    timeout: TimeoutStrategy(const Duration(seconds: 2)),
     fallback: FallbackStrategy.value('fallback value'),
   );
 
@@ -30,12 +29,12 @@ Future<void> main() async {
 
   print(result);
 
-  final breaker = CircuitBreakerStrategy(
+  final breaker = CircuitBreaker(
     failureThreshold: 2,
     recoveryDuration: const Duration(seconds: 30),
   );
 
-  final guarded = RetryPolicy<String>(
+  final guarded = Retry<String>(
     circuitBreaker: breaker,
     fallback: FallbackStrategy.value(
       'cached value',

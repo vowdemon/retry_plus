@@ -1,73 +1,103 @@
+import 'dart:async';
+
 import 'cancellation.dart';
-import 'events.dart';
 import 'exceptions.dart';
 import 'pipeline.dart';
-import 'retry_context.dart';
+import 'retry_pipeline_context.dart';
+import 'telemetry.dart';
 
-/// Timeout scope for timeout strategy failures.
-enum TimeoutScope {
-  /// Timeout applies to one operation attempt.
-  perAttempt,
+/// Context passed to timeout hooks.
+final class TimeoutContext<T> {
+  /// Creates timeout context.
+  const TimeoutContext({
+    required this.timeout,
+    required this.error,
+    required this.pipelineContext,
+  });
 
-  /// Timeout applies to the whole pipeline execution.
-  overall,
+  /// Timeout duration that expired.
+  final Duration timeout;
+
+  /// Timeout error produced by this strategy.
+  final RetryTimeoutException error;
+
+  /// Shared retry execution context.
+  final RetryPipelineContext<T> pipelineContext;
 }
 
 /// Strategy that limits execution time.
-final class TimeoutStrategy<T> implements RetryPipelineStrategy<T> {
-  const TimeoutStrategy._({this.perAttempt, this.overall});
+final class TimeoutStrategy<T> extends RetryPipelineStrategy<T> {
+  TimeoutStrategy(Duration duration, {super.name, this.onTimeout})
+      : duration = _checkPositiveDuration(duration, 'duration'),
+        durationGenerator = null,
+        _source = Object();
 
-  /// Creates a per-attempt timeout strategy.
-  factory TimeoutStrategy.perAttempt(Duration duration) {
-    _checkPositiveDuration(duration, 'duration');
-    return TimeoutStrategy<T>._(perAttempt: duration);
+  TimeoutStrategy._({
+    this.duration,
+    this.durationGenerator,
+    super.name,
+    this.onTimeout,
+  }) : _source = Object();
+
+  /// Creates a position-scoped timeout with a generated duration.
+  factory TimeoutStrategy.generated(
+    FutureOr<Duration?> Function(RetryPipelineContext<T> context) duration, {
+    String? name,
+    FutureOr<void> Function(TimeoutContext<T> context)? onTimeout,
+  }) {
+    return TimeoutStrategy<T>._(
+      durationGenerator: duration,
+      name: name,
+      onTimeout: onTimeout,
+    );
   }
 
-  /// Creates an overall timeout strategy.
-  factory TimeoutStrategy.overall(Duration duration) {
-    _checkPositiveDuration(duration, 'duration');
-    return TimeoutStrategy<T>._(overall: duration);
-  }
+  /// Position-scoped timeout duration.
+  final Duration? duration;
 
-  /// Creates a timeout strategy with both scopes.
-  factory TimeoutStrategy.combined({Duration? perAttempt, Duration? overall}) {
-    if (perAttempt != null) {
-      _checkPositiveDuration(perAttempt, 'perAttempt');
-    }
-    if (overall != null) {
-      _checkPositiveDuration(overall, 'overall');
-    }
-    return TimeoutStrategy<T>._(perAttempt: perAttempt, overall: overall);
-  }
+  /// Generates a timeout duration for one strategy execution.
+  final FutureOr<Duration?> Function(RetryPipelineContext<T> context)?
+      durationGenerator;
 
-  /// Per-attempt timeout duration.
-  final Duration? perAttempt;
+  /// Hook invoked when this timeout strategy expires.
+  final FutureOr<void> Function(TimeoutContext<T> context)? onTimeout;
 
-  /// Overall timeout duration.
-  final Duration? overall;
+  final Object _source;
 
   @override
   Future<T> execute(
-    RetryContext<T> context,
+    RetryPipelineContext<T> context,
     Future<T> Function() next,
   ) async {
-    final duration = perAttempt ?? overall;
-    final scope =
-        perAttempt != null ? TimeoutScope.perAttempt : TimeoutScope.overall;
-    if (duration == null) {
+    final timeout = duration ?? await durationGenerator?.call(context);
+    if (timeout == null) {
       return next();
     }
+    _checkPositiveDuration(timeout, 'timeout');
     context.throwIfCancelled();
     try {
       return await context.timeout<T>(
         next(),
-        duration,
-        scope,
+        timeout,
+        strategy: name,
+        source: _source,
       );
     } on RetryTimeoutException catch (error) {
-      context.emit(
-        PipelineEvent(type: PipelineEventType.timeout, error: error),
-      );
+      if (identical(error.source, _source)) {
+        await context.telemetry?.emit<T>(
+          type: TelemetryEventType.timeoutTimedOut,
+          strategyName: name,
+          error: error,
+          attributes: <String, Object?>{'timeout': timeout},
+        );
+        await onTimeout?.call(
+          TimeoutContext<T>(
+            timeout: timeout,
+            error: error,
+            pipelineContext: context,
+          ),
+        );
+      }
       rethrow;
     } on RetryCancelledException {
       rethrow;
@@ -75,8 +105,9 @@ final class TimeoutStrategy<T> implements RetryPipelineStrategy<T> {
   }
 }
 
-void _checkPositiveDuration(Duration duration, String name) {
+Duration _checkPositiveDuration(Duration duration, String name) {
   if (duration <= Duration.zero) {
     throw ArgumentError.value(duration, name, 'must be positive');
   }
+  return duration;
 }
