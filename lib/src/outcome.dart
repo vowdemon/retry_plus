@@ -126,36 +126,27 @@ final class StrategyOutcomeError<T> extends StrategyOutcome<T> {
 
 /// Shared helpers for reading data from outcome-aware strategy contexts.
 extension OutcomeContextAccess<T> on OutcomeContext<T> {
-  /// Result from a successful outcome.
-  T get result {
+  /// Result from a successful outcome, or `null` for an error outcome.
+  T? get result {
     return switch (outcome) {
       StrategyOutcomeResult(:final result) => result,
-      StrategyOutcomeError() => throw StateError(
-          'Outcome context does not contain a result.',
-        ),
+      StrategyOutcomeError() => null,
     };
   }
 
-  /// Error from a failed outcome.
-  Object get error {
+  /// Error from a failed outcome, or `null` for a result outcome.
+  Object? get error {
     return switch (outcome) {
       StrategyOutcomeError(:final error) => error,
-      StrategyOutcomeResult() => throw StateError(
-          'Outcome context does not contain an error.',
-        ),
+      StrategyOutcomeResult() => null,
     };
   }
 
-  /// Failure alias for [error].
-  Object get failure => error;
-
-  /// Stack trace from a failed outcome.
-  StackTrace get stackTrace {
+  /// Stack trace from a failed outcome, or `null` for a result outcome.
+  StackTrace? get stackTrace {
     return switch (outcome) {
       StrategyOutcomeError(:final stackTrace) => stackTrace,
-      StrategyOutcomeResult() => throw StateError(
-          'Outcome context does not contain a stack trace.',
-        ),
+      StrategyOutcomeResult() => null,
     };
   }
 

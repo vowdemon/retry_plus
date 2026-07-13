@@ -254,7 +254,7 @@ void main() {
             maxHedgedAttempts: 1,
             hedgeIf: HedgingPredicate<int>.never(),
             onOutcome: (context) {
-              outcomes.add(context.failure);
+              outcomes.add(context.error);
             },
             actionGenerator: (_) => throw error,
           ),

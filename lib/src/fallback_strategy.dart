@@ -20,11 +20,11 @@ final class FallbackContext<T> implements OutcomeContext<T> {
   @override
   final StrategyOutcome<T> outcome;
 
-  /// Final failure being handled.
-  Object get failure => OutcomeContextAccess<T>(this).failure;
+  /// Final failure being handled, or `null` for a result outcome.
+  Object? get failure => OutcomeContextAccess<T>(this).error;
 
-  /// Stack trace captured with [failure].
-  StackTrace get stackTrace => OutcomeContextAccess<T>(this).stackTrace;
+  /// Stack trace captured with [failure], or `null` for a result outcome.
+  StackTrace? get stackTrace => OutcomeContextAccess<T>(this).stackTrace;
 
   /// Elapsed pipeline time.
   @override

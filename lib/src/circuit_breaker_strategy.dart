@@ -44,11 +44,11 @@ final class CircuitFailureContext implements OutcomeContext<Object?> {
   @override
   Duration get elapsed => outcome.elapsed;
 
-  /// Failure thrown by guarded execution.
-  Object get failure => OutcomeContextAccess<Object?>(this).failure;
+  /// Failure thrown by guarded execution, or `null` for a result outcome.
+  Object? get failure => OutcomeContextAccess<Object?>(this).error;
 
-  /// Stack trace captured with [failure].
-  StackTrace get stackTrace => OutcomeContextAccess<Object?>(this).stackTrace;
+  /// Stack trace captured with [failure], or `null` for a result outcome.
+  StackTrace? get stackTrace => OutcomeContextAccess<Object?>(this).stackTrace;
 }
 
 /// Predicate that decides whether a failure counts for the circuit breaker.

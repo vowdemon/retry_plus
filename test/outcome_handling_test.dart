@@ -159,12 +159,12 @@ void main() {
 
       expect(resultContext.result, 7);
       expect(resultContext.hasResult, isTrue);
-      expect(() => resultContext.error, throwsStateError);
+      expect(resultContext.error, isNull);
+      expect(resultContext.stackTrace, isNull);
       expect(errorContext.error, same(error));
-      expect(errorContext.failure, same(error));
       expect(errorContext.stackTrace, same(stackTrace));
       expect(errorContext.hasError, isTrue);
-      expect(() => errorContext.result, throwsStateError);
+      expect(errorContext.result, isNull);
     });
   });
 
