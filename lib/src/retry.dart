@@ -38,7 +38,7 @@ RetryFuture<T> retry<T>(
       max: maxDelay,
       jitter: jitter,
     ),
-    retryIf: retryIf,
+    retryIf: retryIf == null ? null : RetryIf<T>.exception() | retryIf,
     onRetry: onRetry,
     onGiveUp: onGiveUp,
     timeout: timeout,
